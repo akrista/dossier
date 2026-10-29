@@ -56,3 +56,7 @@ next-env.d.ts
 /e2e/.auth/
 /playwright-report/
 /test-results/
+
+# AI agent configs
+.mcp.json
+.claude/
