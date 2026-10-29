@@ -142,4 +142,49 @@ describe("OpenAI-compatible servers without JSON schemas", () => {
     await provider.complete(ask);
     expect(requests.length - before).toBe(1);
   });
+
+  it("falls back when a gateway refuses response_format with a generic or 404 parameter error", async () => {
+    const requests = stubFetch(({ body }) => {
+      const format = (body as { response_format?: { type: string } }).response_format?.type;
+      if (format === "json_schema") {
+        return json({ error: { message: "No endpoints found that support the provided parameters" } }, { status: 404 });
+      }
+      if (format === "json_object") {
+        return json({ error: { message: "Provider returned error" } }, { status: 400 });
+      }
+      return json({
+        id: "c",
+        object: "chat.completion",
+        created: 0,
+        model: "gateway-model",
+        choices: [{ index: 0, message: { role: "assistant", content: '{"company": "Ledgerly", "years": 5}' }, finish_reason: "stop" }],
+      });
+    });
+    const provider = new OpenAICompatibleProvider("OPENAI", "https://gateway.example/v1", "sk", "gateway-model", 60_000);
+    expect(await provider.complete(ask)).toEqual({ company: "Ledgerly", years: 5 });
+    expect(requests).toHaveLength(3);
+  });
+
+  it("puts a schema refused as too complex in the prompt only for that schema, keeping structured output for others", async () => {
+    const City = z.object({ city: z.string() });
+    const requests = stubFetch(({ body }) => {
+      const format = (body as { response_format?: unknown }).response_format;
+      if (JSON.stringify(format ?? {}).includes('"years"')) {
+        return json({ error: { message: "The compiled grammar is too large, which would cause performance issues." } }, { status: 400 });
+      }
+      return json({
+        id: "c",
+        object: "chat.completion",
+        created: 0,
+        model: "strict-model",
+        choices: [{ index: 0, message: { role: "assistant", content: format ? '{"city":"Utrecht"}' : '{"company":"Ledgerly","years":5}' }, finish_reason: "stop" }],
+      });
+    });
+    const provider = new OpenAICompatibleProvider("OPENAI", "https://complex.example/v1", "sk", "strict-model", 60_000);
+    expect(await provider.complete({ ...ask, schemaName: "posting" })).toEqual({ company: "Ledgerly", years: 5 });
+    expect(await provider.complete({ ...ask, schema: City, schemaName: "city" })).toEqual({ city: "Utrecht" });
+    expect(requests).toHaveLength(3);
+    expect(requests[1].body).not.toHaveProperty("response_format");
+    expect(requests[2].body).toMatchObject({ response_format: { type: "json_schema" } });
+  });
 });

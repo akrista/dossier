@@ -163,6 +163,50 @@ describe("OpenAICompatibleProvider", () => {
     const provider = new OpenAICompatibleProvider("OPENAI", "https://api.example.com/v1", "sk", null, 60_000);
     expect(await provider.listModels()).toEqual(["a-model", "b-model"]);
   });
+
+  it("normalises OpenCode and OpenRouter addresses, sends OpenCode's session header, and omits dummy auth when no key is set", async () => {
+    const requests = stubFetch(({ url }) =>
+      url.pathname.endsWith("/models")
+        ? json({ object: "list", data: [{ id: "glm-5.3-flash", object: "model" }] })
+        : openaiChat("Hello!"),
+    );
+    const go = new OpenAICompatibleProvider("OPENAI", "https://opencode.ai/inference/go/openai/v1", null, "glm-5.3-flash", 60_000);
+    expect(await go.listModels()).toEqual(["glm-5.3-flash"]);
+    expect(requests[0].url.href).toBe("https://opencode.ai/inference/go/v1/models");
+    expect(requests[0].headers.get("authorization")).toBeNull();
+    expect(requests[0].headers.get("x-opencode-session")).toMatch(/^ses_/);
+    expect(requests[0].headers.get("user-agent")).toMatch(/^Dossier\//);
+
+    const goRoot = new OpenAICompatibleProvider("OPENAI", "https://opencode.ai/inference/go", "oc_sk_test", "glm-5.3-flash", 60_000);
+    expect(await goRoot.complete(ask)).toBe("Hello!");
+    expect(requests[1].url.href).toBe("https://opencode.ai/inference/go/v1/chat/completions");
+    expect(requests[1].headers.get("authorization")).toBe("Bearer oc_sk_test");
+    expect(requests[1].headers.get("x-opencode-session")).toMatch(/^ses_/);
+
+    const router = new OpenAICompatibleProvider("OPENAI", "https://openrouter.ai/v1", "sk-or-test", "openrouter/auto", 60_000);
+    expect(await router.complete(ask)).toBe("Hello!");
+    expect(requests[2].url.href).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+
+  it("leaves room for thinking when a reasoning model gets cut off at the default budget, and remembers it", async () => {
+    const requests = stubFetch(({ body }) => {
+      const max = (body as { max_tokens?: number }).max_tokens ?? 0;
+      if (max <= 4096) {
+        return json({
+          id: "c1",
+          object: "chat.completion",
+          created: 0,
+          model: "glm-5",
+          choices: [{ index: 0, message: { role: "assistant", content: "", reasoning_content: "Thinking through the resume..." }, finish_reason: "length" }],
+        });
+      }
+      return openaiChat('{"name":"Jane","years":9}');
+    });
+    const provider = new OpenAICompatibleProvider("OPENAI", "https://thinker.example/v1", "sk", "glm-5", 60_000);
+    expect(await provider.complete({ ...ask, schema: Person })).toEqual({ name: "Jane", years: 9 });
+    expect(await provider.complete({ ...ask, schema: Person })).toEqual({ name: "Jane", years: 9 });
+    expect(requests.map((request) => (request.body as { max_tokens?: number }).max_tokens)).toEqual([4096, 4096 + 12_000, 4096 + 12_000]);
+  });
 });
 
 describe("AnthropicProvider", () => {
