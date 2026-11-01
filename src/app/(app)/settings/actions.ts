@@ -5,7 +5,10 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { AiProvider, Creativity, DateFormat, JobStatus, PaperSize, Tone } from "@/generated/prisma/enums";
-import { action, ActionError } from "@/lib/action";
+import { action, ActionError, adminAction } from "@/lib/action";
+import { hashPassword } from "@/lib/auth/password-hash";
+import { passwordMatches, startSession } from "@/lib/auth/session";
+import { getUserContext, runUnscoped } from "@/lib/auth/user-context";
 import { AiError, createProvider } from "@/lib/ai";
 import { applyApiKeyChange } from "@/lib/ai/api-key";
 import { keyStateOf, loadAiConfig, resolveAiConfig } from "@/lib/ai/config";
@@ -24,8 +27,9 @@ import { prisma } from "@/lib/prisma";
 import { applySecretChange, JOB_SOURCE_KEY } from "@/lib/secrets";
 
 import { seedBuiltIns } from "../../../../prisma/seed/built-ins";
+import { messages } from "@/lib/messages";
 import { isJobRetention } from "@/lib/settings";
-import { loadSettings, saveSettings } from "@/lib/settings-data";
+import { loadSettings, saveGlobalSettings, saveSettings } from "@/lib/settings-data";
 
 // Settings → AI provider (E6-3). Every field saves on its own, so a test
 // or a model list always reflects what's saved.
@@ -199,7 +203,13 @@ export const updateSettings = action(
     updateCheck: z.boolean().optional(),
   }),
   async (changes) => {
-    await saveSettings(changes);
+    const ctx = getUserContext();
+    const { nightlyBackup, updateCheck, ...userChanges } = changes;
+    if (nightlyBackup !== undefined || updateCheck !== undefined) {
+      if ((ctx.role ?? "ADMIN") !== "ADMIN") throw new ActionError(messages.forbidden);
+      await saveGlobalSettings({ nightlyBackup, updateCheck });
+    }
+    await saveSettings(userChanges);
     return null;
   },
 );
@@ -269,14 +279,17 @@ export const deleteEverything = action(z.object({ confirm: z.literal("DELETE") }
   });
   // An empty profile and default settings need no rows; the built-in themes do.
   await seedBuiltIns(prisma);
-  await Promise.all([deleteAllBackups(), deleteAllDownloads()]);
+  const ctx = getUserContext();
+  if ((ctx.role ?? "ADMIN") === "ADMIN") {
+    await Promise.all([deleteAllBackups(), deleteAllDownloads()]);
+  }
 
   revalidatePath("/", "layout");
   redirect("/");
 });
 
 /** "Check for updates" (E10-9): the latest release, asked for now, and kept for the sidebar's notice. */
-export const checkUpdates = action(z.object({}), async () => {
+export const checkUpdates = adminAction(z.object({}), async () => {
   const result = await checkForUpdate();
   revalidatePath("/", "layout");
   return result.status === "newer" ? result : { status: result.status };
@@ -298,3 +311,70 @@ export const disconnectClaude = action(z.object({}), async (_input, { toast }) =
   toast("Claude is disconnected. Connect it again from Claude to use Dossier there.");
   return null;
 });
+
+// Settings → Account. Display name and password are self-service; login email/username is admin-managed.
+
+/** Updates the signed-in user's own display name (`User.name`). */
+export const updateOwnAccount = action(
+  z.object({
+    name: z.string().trim().max(120),
+  }),
+  async ({ name }, { session }) => {
+    const userId = session.userId || getUserContext().userId;
+    if (!userId) throw new ActionError("Account not found.");
+    const user = await runUnscoped(() => prisma.user.findUnique({ where: { id: userId } }));
+    if (!user) throw new ActionError("Account not found.");
+
+    const updated = await runUnscoped(() =>
+      prisma.user.update({
+        where: { id: userId },
+        data: { name: name || user.email },
+      }),
+    );
+
+    revalidatePath("/", "layout");
+    return { name: updated.name };
+  },
+);
+
+/**
+ * Changes the signed-in user's own password after verifying their current
+ * password, and re-issues the active browser's session cookie so the current
+ * device stays signed in while any other sessions are invalidated.
+ */
+export const changeOwnPassword = action(
+  z.object({
+    currentPassword: z.string().min(1, "Enter your current password."),
+    newPassword: z.string().min(8, "Use at least 8 characters."),
+  }),
+  async ({ currentPassword, newPassword }, { session, toast }) => {
+    const userId = session.userId || getUserContext().userId;
+    if (!userId) throw new ActionError("Account not found.");
+    const user = await runUnscoped(() => prisma.user.findUnique({ where: { id: userId } }));
+    if (!user || !user.passwordHash || !(await passwordMatches(currentPassword, user.passwordHash))) {
+      throw new ActionError("Your current password didn't match.");
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    await runUnscoped(() =>
+      prisma.user.update({
+        where: { id: userId },
+        data: {
+          passwordHash,
+          inviteTokenHash: null,
+          inviteExpiresAt: null,
+        },
+      }),
+    );
+
+    await startSession({
+      persistent: session.persistent,
+      userId: user.id,
+      role: user.role,
+      passwordHash,
+    });
+
+    toast("Password updated.");
+    return null;
+  },
+);

@@ -4,17 +4,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/cn";
-import { isCurrent, NAV } from "@/lib/nav";
+import { ADMIN_NAV_ITEM, isCurrent, NAV } from "@/lib/nav";
 
 import { useSidebarCollapsed } from "./sidebar-frame";
 
 /** The sidebar's navigation, with the current section highlighted. */
-export function NavLinks({ counts }: { counts?: Record<string, number> } = {}) {
+export function NavLinks({ counts, isAdmin = false }: { counts?: Record<string, number>; isAdmin?: boolean } = {}) {
   const pathname = usePathname();
   const collapsed = useSidebarCollapsed();
+  const groups = isAdmin
+    ? NAV.map((group, idx) => (idx === NAV.length - 1 ? { ...group, items: [ADMIN_NAV_ITEM, ...group.items] } : group))
+    : NAV;
   return (
     <nav aria-label="Main" className="flex flex-1 flex-col gap-1">
-      {NAV.map(({ label, items }, index) => (
+      {groups.map(({ label, items }, index) => (
         <div
           key={label ?? index}
           className={cn(

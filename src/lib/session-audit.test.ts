@@ -6,10 +6,11 @@ import { describe, expect, it } from "vitest";
 // matcher mistake can't expose data. Server Actions go through action(),
 // route handlers through route(); these are the only exceptions.
 const SIGNED_OUT_ACTIONS = new Map([
-  // publicAction: signing in, and the same through the form's own submit (#187)
-  ["src/app/login/actions.ts", ["signIn", "signInWithForm"]],
+  // publicAction: signing in, accepting an invite, and the same through the form's own submit (#187)
+  ["src/app/login/actions.ts", ["signIn", "acceptInvite", "signInWithForm"]],
   ["src/lib/auth/actions.ts", ["signOut"]], // only clears the cookie
 ]);
+const ACTION_WRAPPERS = new Set(["action", "adminAction"]);
 const OPEN_ROUTES = new Set([
   "src/app/api/health/route.ts", // for health checks; says nothing private
   // Google's redirect comes from Google's site, so route()'s same-origin check
@@ -37,10 +38,10 @@ describe("session checks (E11-5)", () => {
     expect(globSync("src/app/**/route.ts").length).toBeGreaterThan(5);
   });
 
-  it("defines every Server Action with action()", () => {
+  it("defines every Server Action with action() or adminAction()", () => {
     const unchecked = actionFiles.flatMap((file) =>
       exportsOf(read(file))
-        .filter(([, name, wrapper]) => wrapper !== "action" && !SIGNED_OUT_ACTIONS.get(file)?.includes(name))
+        .filter(([, name, wrapper]) => !ACTION_WRAPPERS.has(wrapper) && !SIGNED_OUT_ACTIONS.get(file)?.includes(name))
         .map(([line]) => `${file}: ${line}`),
     );
     expect(unchecked).toEqual([]);

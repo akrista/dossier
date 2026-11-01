@@ -23,7 +23,7 @@ export async function firstSort(model: {
 
 /** Finds a skill by name, ignoring case (citext), or creates it. */
 export async function findOrCreateSkill(name: string) {
-  const existing = await prisma.skill.findUnique({ where: { name } });
+  const existing = await prisma.skill.findUnique({ where: { userId_name: { userId: "", name } } });
   if (existing) return { skill: { id: existing.id, name: existing.name }, added: false };
   const created = await prisma.skill.create({ data: { name, sort: await nextSort(prisma.skill) } });
   return { skill: { id: created.id, name: created.name }, added: true };

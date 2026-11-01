@@ -13,13 +13,14 @@ import { signIn, signInWithForm } from "./actions";
 import { loginMessages } from "./messages";
 
 /**
- * The password-only sign-in form (PRD AUTH-1, AUTH-4). With scripts, `submit`
- * signs in and the form's own submit never happens. Before they've run, the
- * browser posts the form to `signInWithForm` instead (#187).
+ * The sign-in form (PRD AUTH-1, AUTH-4). Supports optional email/username
+ * identifier for multi-user accounts while keeping password-first sign-in
+ * ergonomic for the default administrator.
  */
 export function LoginForm({ next }: { next?: string }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -38,7 +39,13 @@ export function LoginForm({ next }: { next?: string }) {
     if (!password) return fail(loginMessages.empty);
 
     startTransition(async () => {
-      const result = await signIn({ password, remember, next });
+      const trimmedId = identifier.trim();
+      const result = await signIn({
+        ...(trimmedId ? { identifier: trimmedId } : {}),
+        password,
+        remember,
+        next,
+      });
       if (!result.ok) return fail(result.error);
       toastResult(result);
       router.replace(result.data.redirectTo);
@@ -56,6 +63,25 @@ export function LoginForm({ next }: { next?: string }) {
       <div className="flex flex-col gap-1.5">
         <h1 className="font-serif text-[28px] leading-[1.15] tracking-[-0.01em]">Welcome back</h1>
         <p className="text-sm text-muted">Sign in to pick up where you left off.</p>
+      </div>
+
+      <div className="flex flex-col gap-[7px]">
+        <label htmlFor="identifier" className="text-label text-muted">
+          Email or username
+        </label>
+        <input
+          id="identifier"
+          name="identifier"
+          type="text"
+          autoComplete="username"
+          placeholder="admin"
+          value={identifier}
+          onChange={(event) => {
+            setIdentifier(event.target.value);
+            setError(null);
+          }}
+          className={cn(controlClassName, "h-10 px-3")}
+        />
       </div>
 
       <div className="flex flex-col gap-[7px]">

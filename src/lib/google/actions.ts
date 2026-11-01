@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { Prisma } from "@/generated/prisma/client";
 import { ApplicationStatus } from "@/generated/prisma/enums";
-import { action, ActionError } from "@/lib/action";
+import { action, ActionError, adminAction } from "@/lib/action";
 import { isAiConfigured } from "@/lib/ai/config";
 import { draftReplyJob, replyJobKey } from "@/lib/jobs/draft-reply";
 import { findUnfinishedJobs, startJob } from "@/lib/jobs/runner";
@@ -90,7 +90,7 @@ const clientView = async () => {
  * back to the browser. A different client ID can't use the old grant, so
  * changing it disconnects the account.
  */
-export const saveGoogleClient = action(
+export const saveGoogleClient = adminAction(
   z.strictObject({
     id: z.string().trim().max(300).optional(),
     secret: z

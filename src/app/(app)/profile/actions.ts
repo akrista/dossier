@@ -43,7 +43,7 @@ export const saveBasics = action(
       Object.entries(fieldsFromBasics(basics)).map(([key, value]) =>
         value === null
           ? prisma.profileField.deleteMany({ where: { key } })
-          : prisma.profileField.upsert({ where: { key }, create: { key, value }, update: { value } }),
+          : prisma.profileField.upsert({ where: { userId_key: { userId: "", key } }, create: { key, value }, update: { value } }),
       ),
     );
     // The sidebar shows the name.
@@ -59,7 +59,7 @@ const photoOnResumesRow = (onResumes: boolean) =>
   onResumes
     ? prisma.profileField.deleteMany({ where: { key: PHOTO_ON_RESUMES_KEY } })
     : prisma.profileField.upsert({
-        where: { key: PHOTO_ON_RESUMES_KEY },
+        where: { userId_key: { userId: "", key: PHOTO_ON_RESUMES_KEY } },
         create: { key: PHOTO_ON_RESUMES_KEY, value: "false" },
         update: { value: "false" },
       });
@@ -69,7 +69,7 @@ export const savePhoto = action(
   z.object({ src: z.string().max(PHOTO_MAX_LENGTH).refine(isPhotoDataUrl), onResumes: z.boolean() }),
   async ({ src, onResumes }) => {
     await prisma.$transaction([
-      prisma.profileField.upsert({ where: { key: PHOTO_KEY }, create: { key: PHOTO_KEY, value: src }, update: { value: src } }),
+      prisma.profileField.upsert({ where: { userId_key: { userId: "", key: PHOTO_KEY } }, create: { key: PHOTO_KEY, value: src }, update: { value: src } }),
       photoOnResumesRow(onResumes),
     ]);
     return null;
@@ -108,7 +108,7 @@ const level = z.enum(LanguageLevel);
 export const addLanguage = action(
   z.object({ name: z.string().trim().min(1, "Type a language first.").max(100), level }),
   async ({ name, level }) => {
-    const existing = await prisma.language.findUnique({ where: { name } });
+    const existing = await prisma.language.findUnique({ where: { userId_name: { userId: "", name } } });
     const language = existing
       ? await prisma.language.update({ where: { id: existing.id }, data: { level } })
       : await prisma.language.create({ data: { name, level, sort: await nextSort(prisma.language) } });

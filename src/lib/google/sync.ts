@@ -9,6 +9,7 @@ import { loadTaskOptions } from "@/lib/ai/task-options";
 import { classifyReply } from "@/lib/ai/tasks";
 import { unitsSchema } from "@/lib/application-data";
 import { emailParts } from "@/lib/application-email";
+import { runUnscoped, runWithUserId } from "@/lib/auth/user-context";
 import { logServerError } from "@/lib/log";
 import { prisma } from "@/lib/prisma";
 import { loadSettings } from "@/lib/settings-data";
@@ -123,7 +124,7 @@ async function runSync(historyId: string | null, ownAddress: string, scope: "kno
     if (outgoing && match?.by !== "thread") continue;
 
     const created = await prisma.emailMessage.upsert({
-      where: { gmailId: mail.id },
+      where: { userId_gmailId: { userId: "", gmailId: mail.id } },
       create: {
         gmailId: mail.id,
         threadId: mail.threadId,
@@ -199,16 +200,33 @@ export async function readReply(emailId: string, signal?: AbortSignal): Promise<
 
 const globalForSync = globalThis as unknown as { inboxTimer?: ReturnType<typeof setTimeout>; inboxRunning?: boolean };
 
+async function checkCurrentAccount(): Promise<void> {
+  const [connection, settings] = await Promise.all([googleConnection(), loadSettings()]);
+  if (connection.status !== "connected") return;
+  await pullInterviewEvents().catch((error) => logServerError("calendar check", error));
+  if (connection.canRead && settings.gmailRead) await syncInbox();
+}
+
 /** One scheduled check: interviews changed in Google Calendar, then new mail while reading is on. */
 async function scheduledCheck(): Promise<void> {
   if (globalForSync.inboxRunning) return;
-  const [connection, settings] = await Promise.all([googleConnection(), loadSettings()]);
-  if (connection.status !== "connected") return;
   globalForSync.inboxRunning = true;
   try {
-    // Interviews moved or deleted in Google Calendar, whether or not mail is read.
-    await pullInterviewEvents().catch((error) => logServerError("calendar check", error));
-    if (connection.canRead && settings.gmailRead) await syncInbox();
+    if ((prisma as { user?: unknown }).user) {
+      const users = await runUnscoped(() =>
+        prisma.user.findMany({
+          where: { disabledAt: null },
+          select: { id: true, role: true, allowGlobalKeys: true, keyPreference: true },
+        }),
+      );
+      if (users.length > 0) {
+        for (const user of users) {
+          await runWithUserId(user.id, () => checkCurrentAccount(), user);
+        }
+        return;
+      }
+    }
+    await checkCurrentAccount();
   } finally {
     globalForSync.inboxRunning = false;
   }

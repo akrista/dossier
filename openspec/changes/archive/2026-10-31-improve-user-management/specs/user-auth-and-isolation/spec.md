@@ -1,0 +1,57 @@
+# Spec Delta
+
+## ADDED Requirements
+
+### Requirement: Self-service account management
+The system SHALL provide an authenticated `Settings → Account` section (`?section=account`) where any user can view their read-only login identifier (`email`/username), role, and key policy, update their own display name (`User.name`), and change their own password by providing their current password and a new password of at least 8 characters.
+
+#### Scenario: User updates their own display name
+- **WHEN** an authenticated user submits a new display name in `Settings → Account`
+- **THEN** the system updates `User.name` for that user and reflects the updated name in the sidebar when no resume profile name overrides it
+
+#### Scenario: User changes their own password with valid current password
+- **WHEN** an authenticated user submits their matching current password and a valid new password in `Settings → Account`
+- **THEN** the system updates `User.passwordHash`, re-issues a fresh session cookie for the active browser with the new password fingerprint so the user remains signed in, and invalidates any previously issued sessions on other browsers/devices
+
+#### Scenario: User attempts to change password with wrong current password
+- **WHEN** an authenticated user submits an incorrect current password in `Settings → Account`
+- **THEN** the system rejects the password change with a clear error message and leaves `User.passwordHash` unchanged
+
+#### Scenario: Login identifier is read-only for self-service
+- **WHEN** a user views `Settings → Account` or invokes self-service account actions
+- **THEN** the login identifier (`email`/username) is displayed as read-only and cannot be modified through self-service actions
+
+### Requirement: User identity display in shell and About
+The system SHALL display the signed-in user's identity in the application sidebar (falling back from the resume profile name to `User.name` and then `User.email` before `"New user"`) and in `Settings → About` (showing the user's `email`/username and role).
+
+#### Scenario: Newly invited user with empty resume profile views sidebar and About
+- **WHEN** an authenticated user whose resume `ProfileField` name is empty loads any signed-in page or `Settings → About`
+- **THEN** the sidebar displays `User.name` (or `User.email` if `name` is empty) and `Settings → About` displays their sign-in identifier and role
+
+## MODIFIED Requirements
+
+### Requirement: Multi-user credential authentication
+The system SHALL authenticate users on `/login` using a unique case-insensitive identifier (email or username) and password, recording `lastSignInAt` on the `User` record and issuing an encrypted session cookie tied to that user's ID, role, and password hash fingerprint.
+
+#### Scenario: Valid user sign-in
+- **WHEN** an active user submits a matching identifier and password on `/login`
+- **THEN** the system updates `User.lastSignInAt` to the current timestamp, sets an encrypted session cookie carrying the user's `userId`, `role`, and password fingerprint, resets login throttle counters for the IP, and redirects to the requested page or dashboard
+
+#### Scenario: Disabled or non-existent user sign-in
+- **WHEN** a visitor submits credentials for a disabled user, a non-existent identifier, or an incorrect password
+- **THEN** the system increments the login throttle counter and returns the generic invalid-credentials error without revealing whether the account exists
+
+#### Scenario: Password change invalidates prior sessions
+- **WHEN** a user's password hash changes (by the user or by an administrator) or the user account is disabled
+- **THEN** any previously issued session cookie for that user with the old password fingerprint is rejected on subsequent requests and redirects the visitor to `/login`
+
+### Requirement: One-time invite link onboarding
+The system SHALL allow an invited user with a valid, unexpired invite token to set their password and sign in without public self-registration, recording `lastSignInAt` when the invitation is accepted.
+
+#### Scenario: Accepting a valid invite token
+- **WHEN** a visitor opens `/login/invite?token=<token>` with a valid, unexpired token and submits a new password
+- **THEN** the system saves the user's password hash, clears the invite token so it cannot be reused, sets `User.lastSignInAt` to the current timestamp, and starts an authenticated session
+
+#### Scenario: Expired or invalid invite token
+- **WHEN** a visitor opens or submits an expired or unknown invite token
+- **THEN** the system refuses password setup and displays an error instructing them to ask an administrator for a new invite link

@@ -65,7 +65,7 @@ export async function sendApplicationEmail(applicationId: string): Promise<SentA
   await prisma.$transaction([
     prisma.application.update({ where: { id: applicationId }, data: { emailThreadId: sent.threadId } }),
     prisma.emailMessage.upsert({
-      where: { gmailId: sent.id },
+      where: { userId_gmailId: { userId: "", gmailId: sent.id } },
       create: {
         gmailId: sent.id,
         threadId: sent.threadId,
@@ -112,7 +112,7 @@ export async function sendReply(emailId: string, body: string): Promise<{ applic
   await prisma.$transaction([
     prisma.emailMessage.update({ where: { id: emailId }, data: { handledAt: new Date(), replyDraft: "", replyGaps: [] } }),
     prisma.emailMessage.upsert({
-      where: { gmailId: sent.id },
+      where: { userId_gmailId: { userId: "", gmailId: sent.id } },
       create: {
         gmailId: sent.id,
         threadId: sent.threadId,

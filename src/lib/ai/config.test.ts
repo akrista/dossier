@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { encryptApiKey } from "./api-key";
-import { isAiUsable, resolveAiConfig } from "./config";
+import { isAiUsable, resolveAiConfig, resolveAiConfigChain } from "./config";
 import { AiError } from "./errors";
 import { createProvider } from "./index";
 
 vi.mock("@/lib/env", () => ({ env: { DOSSIER_SECRET: "a".repeat(32) } }));
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 const saved = vi.hoisted(() => ({ settings: { provider: null, baseUrl: null, model: null, apiKeyEnc: null } as Record<string, unknown> }));
-vi.mock("@/lib/settings-data", () => ({ loadSettings: async () => saved.settings }));
+vi.mock("@/lib/settings-data", () => ({
+  loadSettings: async () => saved.settings,
+  loadGlobalSettings: async () => saved.settings,
+}));
 
 const noEnv = {} as Parameters<typeof resolveAiConfig>[1];
 const nothingSaved = { provider: null, baseUrl: null, model: null, apiKeyEnc: null };
@@ -108,5 +111,39 @@ describe("isAiUsable (#221)", () => {
     expect(await usable({ provider: "ANTHROPIC" })).toBe(false);
     expect(await usable({ provider: "ANTHROPIC", apiKeyEnc: encryptApiKey("sk-saved") })).toBe(true);
     expect(await usable({ provider: "MISTRAL", apiKeyEnc: encryptApiKey("sk", "b".repeat(32)) })).toBe(false);
+  });
+});
+
+describe("resolveAiConfigChain (BYOK & Global Keys)", () => {
+  const userSaved = {
+    provider: "OPENAI" as const,
+    baseUrl: null,
+    model: "gpt-4o",
+    apiKeyEnc: encryptApiKey("sk-user"),
+  };
+  const globalSaved = {
+    provider: "OPENAI" as const,
+    baseUrl: null,
+    model: "gpt-4o-mini",
+    apiKeyEnc: encryptApiKey("sk-global"),
+    keyPreference: "USER_FIRST" as const,
+  };
+
+  it("forbids global and env keys when allowGlobalKeys is false", () => {
+    const withoutUserKey = resolveAiConfigChain(nothingSaved, globalSaved, { DOSSIER_AI_PROVIDER: "openai", DOSSIER_AI_KEY: "sk-env" }, { allowGlobalKeys: false });
+    expect(withoutUserKey).toHaveLength(1);
+    expect(withoutUserKey[0].apiKey).toBeNull();
+
+    const withUserKey = resolveAiConfigChain(userSaved, globalSaved, { DOSSIER_AI_PROVIDER: "openai", DOSSIER_AI_KEY: "sk-env" }, { allowGlobalKeys: false });
+    expect(withUserKey).toHaveLength(1);
+    expect(withUserKey[0].apiKey).toBe("sk-user");
+  });
+
+  it("orders [user, global] when keyPreference is USER_FIRST and [global, user] when GLOBAL_FIRST", () => {
+    const userFirst = resolveAiConfigChain(userSaved, globalSaved, noEnv, { allowGlobalKeys: true, keyPreference: "USER_FIRST" });
+    expect(userFirst.map((c) => c.apiKey)).toEqual(["sk-user", "sk-global"]);
+
+    const globalFirst = resolveAiConfigChain(userSaved, globalSaved, noEnv, { allowGlobalKeys: true, keyPreference: "GLOBAL_FIRST" });
+    expect(globalFirst.map((c) => c.apiKey)).toEqual(["sk-global", "sk-user"]);
   });
 });

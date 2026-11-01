@@ -71,12 +71,14 @@ export function DataSection({
   exportName,
   backups,
   jobRetentionHours,
+  isAdmin = true,
 }: {
   hasApiKey: boolean;
   exportName: string;
   backups: BackupStatus;
   /** How long finished background jobs are kept. */
   jobRetentionHours: number;
+  isAdmin?: boolean;
 }) {
   const [includeKey, setIncludeKey] = useState(false);
   const router = useRouter();
@@ -247,25 +249,27 @@ export function DataSection({
             </Select>
           }
         />
-        <div className="flex flex-col gap-2 border-t border-line py-4">
-          <Toggle
-            label="Nightly backups"
-            description={
-              nightly
-                ? `Kept for ${backups.retentionDays} days in ${backups.dir}. ${
-                    backups.lastRun ? `Last one ran ${backups.lastRun}.` : "The first one runs tonight at 03:00."
-                  }`
-                : "Off. You'll only have what you export yourself."
-            }
-            checked={nightly}
-            onCheckedChange={switchBackups}
-          />
-          {nightly && backups.problem && (
-            <p role="alert" className="rounded-control bg-danger-surface px-3 py-2 text-meta text-error">
-              The last backup failed: {backups.problem}
-            </p>
-          )}
-        </div>
+        {isAdmin && (
+          <div className="flex flex-col gap-2 border-t border-line py-4">
+            <Toggle
+              label="Nightly backups"
+              description={
+                nightly
+                  ? `Kept for ${backups.retentionDays} days in ${backups.dir}. ${
+                      backups.lastRun ? `Last one ran ${backups.lastRun}.` : "The first one runs tonight at 03:00."
+                    }`
+                  : "Off. You'll only have what you export yourself."
+              }
+              checked={nightly}
+              onCheckedChange={switchBackups}
+            />
+            {nightly && backups.problem && (
+              <p role="alert" className="rounded-control bg-danger-surface px-3 py-2 text-meta text-error">
+                The last backup failed: {backups.problem}
+              </p>
+            )}
+          </div>
+        )}
       </Card>
       <DangerZone />
       {preview && (

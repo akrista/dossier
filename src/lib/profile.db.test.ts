@@ -21,7 +21,7 @@ describe("profile schema", () => {
     await expect(db.skill.create({ data: { name: "figma" } })).rejects.toSatisfy(
       (error) => error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002",
     );
-    expect(await db.skill.findUnique({ where: { name: "FIGMA" } })).toMatchObject({
+    expect(await db.skill.findUnique({ where: { userId_name: { userId: "", name: "FIGMA" } } })).toMatchObject({
       name: "Figma",
     });
 

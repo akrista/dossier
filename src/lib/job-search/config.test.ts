@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { KeyPreference } from "@/generated/prisma/enums";
 import { encryptSecret, JOB_SOURCE_KEY } from "@/lib/secrets";
 
-import { arbeitsagenturStartupNotice, credentialsFor, jobSearchView, requestContext, resolveJobSearchConfig } from "./config";
+import { arbeitsagenturStartupNotice, credentialsChainFor, credentialsFor, jobSearchView, requestContext, resolveJobSearchConfig, resolveJobSearchConfigChain } from "./config";
 
 vi.mock("@/lib/env", () => ({ env: { DOSSIER_SECRET: "a".repeat(32) } }));
 
@@ -153,5 +154,49 @@ describe("FreeHire from the environment", () => {
     const own = resolveJobSearchConfig(nothingSaved, { DOSSIER_FREEHIRE_URL: "https://jobs.example:8443" });
     expect(own.freehire).toEqual({ url: "https://jobs.example:8443" });
     expect(jobSearchView(own).freehire).toEqual({ host: "jobs.example:8443" });
+  });
+});
+
+describe("resolveJobSearchConfigChain & credentialsChainFor", () => {
+  const userWithKey = {
+    ...nothingSaved,
+    jobSource: "JSEARCH" as const,
+    jsearchKeyEnc: encryptSecret(JOB_SOURCE_KEY, "ak_user"),
+    jsearchHost: "openwebninja" as const,
+  };
+  const globalWithKey = {
+    ...nothingSaved,
+    jobSource: "JSEARCH" as const,
+    jsearchKeyEnc: encryptSecret(JOB_SOURCE_KEY, "ak_global"),
+    jsearchHost: "rapidapi" as const,
+    keyPreference: KeyPreference.USER_FIRST,
+  };
+
+  it("refuses global and env keys when allowGlobalKeys is false", () => {
+    const chain = resolveJobSearchConfigChain(nothingSaved, globalWithKey, { DOSSIER_JSEARCH_KEY: "ak_env" }, { allowGlobalKeys: false });
+    expect(chain).toHaveLength(1);
+    expect(chain[0].jsearch.key).toBeNull();
+    expect(() => credentialsChainFor(chain, "JSEARCH")).toThrow("Add your JSearch key in Settings → Job search first.");
+  });
+
+  it("orders user key before global key when keyPreference is USER_FIRST", () => {
+    const chain = resolveJobSearchConfigChain(userWithKey, globalWithKey, noEnv, { allowGlobalKeys: true });
+    expect(chain).toHaveLength(2);
+    expect(credentialsChainFor(chain, "JSEARCH")).toEqual([
+      { key: "ak_user", host: "openwebninja" },
+      { key: "ak_global", host: "rapidapi" },
+    ]);
+  });
+
+  it("orders global key before user key when keyPreference is GLOBAL_FIRST", () => {
+    const chain = resolveJobSearchConfigChain(userWithKey, globalWithKey, noEnv, {
+      allowGlobalKeys: true,
+      keyPreference: KeyPreference.GLOBAL_FIRST,
+    });
+    expect(chain).toHaveLength(2);
+    expect(credentialsChainFor(chain, "JSEARCH")).toEqual([
+      { key: "ak_global", host: "rapidapi" },
+      { key: "ak_user", host: "openwebninja" },
+    ]);
   });
 });

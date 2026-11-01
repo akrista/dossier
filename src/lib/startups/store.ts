@@ -117,7 +117,7 @@ export async function upsertStartups(found: readonly FoundStartup[], now = new D
       reasons: fit.reasons,
       scoredWith: MATCH_VERSION,
     };
-    if (known) updates.push(prisma.startup.update({ where: { source_externalId: { source: startup.source, externalId: startup.externalId } }, data: fields }));
+    if (known) updates.push(prisma.startup.update({ where: { userId_source_externalId: { userId: "", source: startup.source, externalId: startup.externalId } }, data: fields }));
     else creates.push({ source: startup.source, externalId: startup.externalId, ...fields });
   }
   for (let index = 0; index < creates.length; index += 200) {

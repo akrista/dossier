@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { json, stubFetch } from "@/lib/ai/test-http";
 import { jsearchV2LastPage, jsearchV2Page } from "@/test/job-search-fixtures";
 
+vi.mock("@/lib/env", () => ({ env: { DOSSIER_SECRET: "a".repeat(32) } }));
+
 import { clearJobSearchCache } from "./cache";
+import * as configMod from "./config";
+import { jobSearchError } from "./errors";
+import { askSource, fullText } from "./find";
+import * as indexMod from "./index";
 import { postingDetails, searchPostings, testSource } from "./index";
 import { EMPTY_QUERY } from "./search";
 import { sourceCovers } from "./sources";
@@ -95,5 +101,59 @@ describe("testSource", () => {
   it("throws the problem when it doesn't", async () => {
     stubFetch(() => json({}, { status: 401 }));
     await expect(testSource("JSEARCH", ninja)).rejects.toMatchObject({ problem: "key" });
+  });
+});
+
+describe("askSource & fullText runtime key failover", () => {
+  const makeConfig = (key: string): configMod.JobSearchConfig => ({
+    source: "JSEARCH",
+    saved: true,
+    jsearch: { key, host: "openwebninja", keyState: "set" },
+    adzuna: { appId: "", key: null, keyState: "none" },
+    arbeitsagentur: { offered: true, acceptedAt: null },
+    freehire: { url: "https://freehire.me" },
+  });
+
+  it("retries askSource with the secondary key when the primary fails with key, quota, or unavailable", async () => {
+    vi.spyOn(configMod, "loadJobSearchConfigChain").mockResolvedValue([makeConfig("ak_primary"), makeConfig("ak_secondary")]);
+    let calls = 0;
+    const requests = stubFetch(() => {
+      calls += 1;
+      if (calls === 1) return json({}, { status: 429 });
+      return json(jsearchV2LastPage);
+    });
+
+    const res = await askSource(query);
+    expect(res).toMatchObject({ ok: true, source: "JSEARCH", next: null });
+    expect(requests).toHaveLength(2);
+    expect(requests[0].headers.get("x-api-key")).toBe("ak_primary");
+    expect(requests[1].headers.get("x-api-key")).toBe("ak_secondary");
+  });
+
+  it("does not retry askSource on non-failover problems such as country or changed", async () => {
+    vi.spyOn(configMod, "loadJobSearchConfigChain").mockResolvedValue([makeConfig("ak_primary"), makeConfig("ak_secondary")]);
+    const requests = stubFetch(() => json({}, { status: 404 }));
+
+    const res = await askSource(query);
+    expect(res).toMatchObject({ ok: false, problem: "changed" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("retries fullText with the secondary key when the primary fails with key or quota", async () => {
+    stubFetch(() => json(jsearchV2Page));
+    const [posting] = (await searchPostings("JSEARCH", ninja, query)).postings;
+    clearJobSearchCache();
+
+    vi.spyOn(configMod, "loadJobSearchConfigChain").mockResolvedValue([makeConfig("ak_primary"), makeConfig("ak_secondary")]);
+    const detailsSpy = vi
+      .spyOn(indexMod, "postingDetails")
+      .mockRejectedValueOnce(jobSearchError("key", "JSEARCH"))
+      .mockResolvedValueOnce("Full job description after failover");
+
+    const text = await fullText({ ...posting, complete: false });
+    expect(text).toBe("Full job description after failover");
+    expect(detailsSpy).toHaveBeenCalledTimes(2);
+    expect(detailsSpy.mock.calls[0][1]).toEqual({ key: "ak_primary", host: "openwebninja" });
+    expect(detailsSpy.mock.calls[1][1]).toEqual({ key: "ak_secondary", host: "openwebninja" });
   });
 });

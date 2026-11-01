@@ -19,25 +19,62 @@ datasource db {
   provider = "postgresql"
 }
 
+// ─── Users (multi-user-byok) ─────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum KeyPreference {
+  USER_FIRST
+  GLOBAL_FIRST
+}
+
+model User {
+  id              String         @id @default(cuid())
+  /// Unique sign-in identifier (email or username), case-insensitive.
+  email           String         @unique @db.Citext
+  name            String         @default("")
+  passwordHash    String         @default("")
+  role            UserRole       @default(USER)
+  /// Whether this user may fall back to or use global Admin keys.
+  allowGlobalKeys Boolean        @default(false)
+  /// Null inherits the instance's global keyPreference setting.
+  keyPreference   KeyPreference?
+  disabledAt      DateTime?
+  lastSignInAt    DateTime?
+  inviteTokenHash String?        @unique
+  inviteExpiresAt DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
 // ─── Profile (E2-1) ──────────────────────────────────────────────────────────
 
 /// The profile's basics (name, headline, contact details, summary…), one row
 /// per filled-in field. The keys and how each value is written are in
 /// src/lib/profile.ts (PROFILE_KEYS); a missing key means empty.
 model ProfileField {
-  key       String   @id
+  userId    String   @default("")
+  key       String
   value     String
   updatedAt DateTime @updatedAt
+
+  @@id([userId, key])
 }
 
 model Skill {
   id          String            @id @default(cuid())
+  userId      String            @default("")
   /// Unique ignoring case ("Figma" and "figma" are the same skill).
-  name        String            @unique @db.Citext
+  name        String            @db.Citext
   sort        Int               @default(0)
   experiences ExperienceSkill[]
   projects    ProjectSkill[]
   createdAt   DateTime          @default(now())
+
+  @@unique([userId, name])
 }
 
 enum LanguageLevel {
@@ -52,16 +89,20 @@ enum LanguageLevel {
 
 model Language {
   id        String        @id @default(cuid())
+  userId    String        @default("")
   /// Unique ignoring case; adding an existing language updates its level (PRO-4).
-  name      String        @unique @db.Citext
+  name      String        @db.Citext
   level     LanguageLevel
   sort      Int           @default(0)
   createdAt DateTime      @default(now())
+
+  @@unique([userId, name])
 }
 
 /// A role. Dates are month and year; `current` means "Present" (no end date).
 model Experience {
   id         String            @id @default(cuid())
+  userId     String            @default("")
   role       String            @default("")
   company    String            @default("")
   location   String            @default("")
@@ -79,6 +120,8 @@ model Experience {
   skills     ExperienceSkill[]
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
+
+  @@index([userId])
 }
 
 /// A skill used in a role (PRO-6). Deleting either side removes the link (PRO-3).
@@ -95,6 +138,7 @@ model ExperienceSkill {
 /// A side, open-source, course or thesis project (PRO-13). Dates work as in Experience.
 model Project {
   id         String         @id @default(cuid())
+  userId     String         @default("")
   name       String         @default("")
   /// Where it can be seen, e.g. its repository or site.
   link       String         @default("")
@@ -109,6 +153,8 @@ model Project {
   skills     ProjectSkill[]
   createdAt  DateTime       @default(now())
   updatedAt  DateTime       @updatedAt
+
+  @@index([userId])
 }
 
 /// A skill used in a project, as ExperienceSkill is for a role.
@@ -125,6 +171,7 @@ model ProjectSkill {
 /// A degree, course or certificate. Dates work as in Experience.
 model Education {
   id         String   @id @default(cuid())
+  userId     String   @default("")
   degree     String   @default("")
   school     String   @default("")
   startYear  Int?
@@ -136,12 +183,15 @@ model Education {
   sort       Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  @@index([userId])
 }
 
 /// Private unless included in a document (PRO-8).
 /// A publication (#218), cited the way its author wants: no citation style is enforced.
 model Publication {
   id        String   @id @default(cuid())
+  userId    String   @default("")
   /// The citation as written, with **bold** and *italic* marked like that.
   citation  String   @default("")
   /// Where to read it, e.g. its DOI link.
@@ -151,10 +201,13 @@ model Publication {
   sort      Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 model Reference {
   id        String   @id @default(cuid())
+  userId    String   @default("")
   name      String   @default("")
   relation  String   @default("")
   company   String   @default("")
@@ -163,6 +216,8 @@ model Reference {
   sort      Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 /// Something the user tells the AI about themselves: one of the profile's
@@ -170,6 +225,7 @@ model Reference {
 /// document; given to the AI with the profile when it writes.
 model Fact {
   id            String       @id @default(cuid())
+  userId        String       @default("")
   /// The application it's for; null for the profile's own.
   applicationId String?
   application   Application? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
@@ -178,6 +234,7 @@ model Fact {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
+  @@index([userId, applicationId, sort])
   @@index([applicationId, sort])
 }
 
@@ -278,6 +335,7 @@ enum Density {
 /// them in sync, and a trigger stops them from being deleted.
 model Theme {
   id            String        @id @default(cuid())
+  userId        String        @default("")
   builtIn       Boolean       @default(false)
   name          String
   headFont      ThemeFont
@@ -296,6 +354,8 @@ model Theme {
   documents     Document[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
+
+  @@index([userId])
 }
 
 enum AiProvider {
@@ -340,9 +400,12 @@ enum Tone {
 /// The keys, their types and defaults are in src/lib/settings.ts
 /// (settingsSchema); the enums above type its values.
 model Setting {
-  key       String   @id
+  userId    String   @default("")
+  key       String
   value     String
   updatedAt DateTime @updatedAt
+
+  @@id([userId, key])
 }
 
 // ─── Applications (E2-3) ─────────────────────────────────────────────────────
@@ -391,6 +454,7 @@ enum FunnelStage {
 
 model Application {
   id                  String            @id @default(cuid())
+  userId              String            @default("")
   /// Whether the user made it, or the job agent prepared it (E16).
   origin              ApplicationOrigin @default(MANUAL)
   /// The agent's score for the posting, when the agent prepared it.
@@ -457,6 +521,8 @@ model Application {
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
 
+  @@index([userId, status])
+  @@index([userId, updatedAt])
   @@index([status])
   @@index([updatedAt])
 }
@@ -590,6 +656,7 @@ enum PostingSource {
 /// fields follow the posting shape in src/lib/job-search/search.ts.
 model Posting {
   id            String        @id @default(cuid())
+  userId        String        @default("")
   source        PostingSource
   /// The source's own id for it.
   externalId    String
@@ -617,7 +684,9 @@ model Posting {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  @@unique([source, externalId])
+  @@unique([userId, source, externalId])
+  @@index([userId, savedAt])
+  @@index([userId, dismissedAt])
   @@index([savedAt])
   @@index([dismissedAt])
 }
@@ -627,12 +696,14 @@ model Posting {
 /// task-data sweep deletes it.
 model ClaudePaste {
   id        String   @id @default(uuid())
+  userId    String   @default("")
   text      String
   /// The posting's link, when one was given; always http(s), or empty.
   url       String   @default("")
   expiresAt DateTime
   createdAt DateTime @default(now())
 
+  @@index([userId])
   @@index([expiresAt])
 }
 
@@ -643,6 +714,7 @@ model ClaudePaste {
 /// posting never comes back.
 model AgentCandidate {
   id            String               @id @default(cuid())
+  userId        String               @default("")
   source        PostingSource
   /// The source's own id for it.
   externalId    String
@@ -672,11 +744,13 @@ model AgentCandidate {
   application   Application?         @relation(fields: [applicationId], references: [id], onDelete: SetNull)
   /// A hash of the link without tracking parameters, else of company, title
   /// and place: the same job from another source or a later run matches.
-  dedupeKey     String               @unique
+  dedupeKey     String
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
-  @@unique([source, externalId])
+  @@unique([userId, source, externalId])
+  @@unique([userId, dedupeKey])
+  @@index([userId, status, score])
   @@index([status, score])
   @@index([createdAt])
 }
@@ -685,6 +759,7 @@ model AgentCandidate {
 /// the job agent. Kept by the source's id, for search results that aren't
 /// stored as postings, so the score shows again in later searches.
 model PostingScore {
+  userId     String        @default("")
   source     PostingSource
   externalId String
   /// 0–100 (score-posting).
@@ -697,13 +772,14 @@ model PostingScore {
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
 
-  @@id([source, externalId])
+  @@id([userId, source, externalId])
 }
 
 /// A search on Find jobs, kept with what it found until the user removes it
 /// (E14-10), so going back to it costs no searches from the source's plan.
 model PostingSearch {
   id        String        @id @default(cuid())
+  userId    String        @default("")
   source    PostingSource
   /// The search as asked (searchQuerySchema in src/lib/job-search/search.ts).
   query     Json
@@ -716,6 +792,7 @@ model PostingSearch {
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
+  @@index([userId, createdAt])
   @@index([createdAt])
 }
 
@@ -736,6 +813,7 @@ enum StartupStatus {
 /// them for a while.
 model Startup {
   id                 String        @id @default(cuid())
+  userId             String        @default("")
   /// Where it was found: "YC" (YC's job posts) or "HN" ("Who is hiring?").
   source             String
   /// The Hacker News item's id.
@@ -781,7 +859,8 @@ model Startup {
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 
-  @@unique([source, externalId])
+  @@unique([userId, source, externalId])
+  @@index([userId, status, score])
   @@index([status, score])
 }
 
@@ -789,8 +868,11 @@ model Startup {
 /// SHA-256 hash of its post, its site's domain or its name, so a refresh
 /// leaves it out without keeping anything about it.
 model StartupBlock {
-  hash      String   @id
+  userId    String   @default("")
+  hash      String
   createdAt DateTime @default(now())
+
+  @@id([userId, hash])
 }
 
 // ─── Google: Gmail and Calendar (E15) ────────────────────────────────────────
@@ -835,7 +917,8 @@ enum ReplyKind {
 /// the text is kept, not attachments.
 model EmailMessage {
   id              String             @id @default(cuid())
-  gmailId         String             @unique
+  userId          String             @default("")
+  gmailId         String
   threadId        String
   /// Null while it isn't linked to an application ("Needs a look").
   /// Deleting the application deletes its mail, as it does its documents.
@@ -874,6 +957,8 @@ model EmailMessage {
   dismissedAt     DateTime?
   createdAt       DateTime           @default(now())
 
+  @@unique([userId, gmailId])
+  @@index([userId, threadId])
   @@index([threadId])
   @@index([applicationId, sentAt])
   @@index([sentAt])
@@ -910,6 +995,7 @@ enum JobStatus {
 /// documents. Each job type validates its own input and result (src/lib/jobs).
 model Job {
   id            String       @id @default(cuid())
+  userId        String       @default("")
   /// Which handler runs it, e.g. "extract-posting".
   type          String
   /// Finds the job again for something on screen, e.g. "application:<id>".
@@ -929,6 +1015,7 @@ model Job {
   finishedAt    DateTime?
   updatedAt     DateTime     @updatedAt
 
+  @@index([userId, key, createdAt])
   @@index([key, createdAt])
   @@index([status])
   @@index([applicationId])

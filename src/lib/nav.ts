@@ -1,4 +1,4 @@
-import { Bot, BriefcaseBusiness, FileText, House, Inbox, Rocket, Search, Settings, UserRound, type LucideIcon } from "lucide-react";
+import { Bot, BriefcaseBusiness, FileText, House, Inbox, Rocket, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 
 // The app's sections, shared by the sidebar and the page bar so they always agree.
 
@@ -12,6 +12,8 @@ export type NavItem = {
 
 const within = (pathname: string, base: string) =>
   pathname === base || pathname.startsWith(`${base}/`);
+
+export const ADMIN_NAV_ITEM: NavItem = { href: "/admin", label: "Admin", icon: Shield };
 
 /** The sections in groups; the last group sits at the bottom. */
 export const NAV: { label?: string; items: NavItem[] }[] = [
@@ -46,5 +48,5 @@ export const isCurrent = ({ href, isActive = (path) => within(path, href) }: Nav
 
 /** The section a path belongs to, for the page bar's title; undefined outside them all. */
 export function currentSection(pathname: string): NavItem | undefined {
-  return NAV.flatMap((group) => group.items).find((item) => isCurrent(item, pathname));
+  return [...NAV.flatMap((group) => group.items), ADMIN_NAV_ITEM].find((item) => isCurrent(item, pathname));
 }

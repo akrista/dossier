@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 
+import { KeyPreference, UserRole } from "@/generated/prisma/enums";
 import { isAiConfigured, loadAiConfig, loadAiSettingsView } from "@/lib/ai/config";
+import { verifySession } from "@/lib/auth/session";
 import { jobSearchView, loadJobSearchConfig } from "@/lib/job-search/config";
 import { COUNTRIES } from "@/lib/job-search/countries";
 import { loadSearch } from "@/lib/posting-searches";
@@ -18,10 +20,11 @@ import { lastKnownTimeZone, userTimeZone } from "@/lib/time-zone";
 import { appVersion } from "@/lib/version";
 import { prisma } from "@/lib/prisma";
 import { loadProfileName } from "@/lib/profile-data";
-import { loadSettings } from "@/lib/settings-data";
+import { loadGlobalSettings, loadSettings } from "@/lib/settings-data";
 import { availableUpdate } from "@/lib/update-check";
 import { USAGE_PING_HOST, usagePingChoice } from "@/lib/usage-ping";
 
+import { AccountSection } from "./account-section";
 import { AgentSection } from "./agent-section";
 import { AiBehaviour } from "./ai-behaviour";
 import { AiProviderSection } from "./ai-provider-section";
@@ -39,12 +42,32 @@ export const metadata: Metadata = { title: "Settings" };
 
 /** Settings (PRD §6.8); the section is in `?section=` (E10-1). */
 export default async function SettingsPage({ searchParams }: PageProps<"/settings">) {
+  const session = await verifySession();
+  const isAdmin = (session.role ?? "ADMIN") === "ADMIN";
+  const allowGlobalKeys = session.allowGlobalKeys ?? true;
   const params = await searchParams;
   const section = settingsSectionFromParam(params.section);
   const settings = await loadSettings();
+  const effectiveKeyPreference =
+    section === "ai" || section === "jobs" || section === "account"
+      ? (session.keyPreference ?? (await loadGlobalSettings().catch(() => null))?.keyPreference ?? KeyPreference.USER_FIRST)
+      : KeyPreference.USER_FIRST;
+  const hasPersonalKey =
+    section === "ai"
+      ? Boolean(settings.apiKeyEnc)
+      : Boolean(settings.jsearchKeyEnc || (settings.adzunaAppId && settings.adzunaKeyEnc));
 
   return (
     <SettingsScreen section={section}>
+      {(section === "ai" || section === "jobs") && (
+        <p role="note" className="rounded-card border border-line-card bg-card px-4 py-3 text-meta text-muted">
+          {!allowGlobalKeys
+            ? `Your account requires your own API key (BYOK). Add your personal key below to use ${section === "ai" ? "AI features" : "job search sources that require a key"}.`
+            : effectiveKeyPreference === KeyPreference.GLOBAL_FIRST
+              ? `Key policy: Global key first (${KeyPreference.GLOBAL_FIRST}). Requests use the server's global key first${hasPersonalKey ? " and automatically fail over to your personal key if the global key fails." : ". You can optionally add a personal fallback key below."}`
+              : `Key policy: Personal key first (${KeyPreference.USER_FIRST}). ${hasPersonalKey ? "Requests use your personal key first and automatically fail over to the server's global key on error." : "No personal key saved — requests currently use the server's global key when configured."}`}
+        </p>
+      )}
       {section === "ai" ? (
         <>
           <AiProviderSection initial={await loadAiSettingsView()} />
@@ -77,6 +100,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
             client={await googleClientView()}
             browserTimeZone={(await userTimeZone()) ?? null}
             redirectUri={redirectUri(await requestOrigin())}
+            isAdmin={isAdmin}
             initial={{
               gmailRead: settings.gmailRead,
               gmailScope: settings.gmailScope,
@@ -95,6 +119,16 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
         </>
       ) : section === "claude" ? (
         <ConnectorSection initial={{ on: settings.connectorEnabledAt !== null }} address={mcpUrl(env.DOSSIER_PUBLIC_URL ?? (await requestOrigin()))} />
+      ) : section === "account" ? (
+        <AccountSection
+          initial={{
+            email: session.userEmail ?? "admin",
+            name: session.userName ?? "",
+            role: session.role ?? UserRole.ADMIN,
+            allowGlobalKeys,
+            effectiveKeyPreference,
+          }}
+        />
       ) : section === "data" ? (
         <DataSection
           hasApiKey={[settings.apiKeyEnc, settings.jsearchKeyEnc, settings.adzunaKeyEnc].some((key) => key !== null)}
@@ -107,6 +141,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
             problem: settings.backupProblem,
           }}
           jobRetentionHours={settings.jobRetentionHours}
+          isAdmin={isAdmin}
         />
       ) : section === "documents" ? (
         <DocumentsSection
@@ -126,9 +161,10 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
         />
       ) : (
         <AboutSection
-          facts={await aboutFacts()}
+          facts={await aboutFacts(session)}
           usagePing={await usagePingView()}
           updates={{ daily: settings.updateCheck, available: availableUpdate(settings) }}
+          isAdmin={isAdmin}
         />
       )}
     </SettingsScreen>
@@ -194,7 +230,7 @@ function formatBytes(bytes: number): string {
 }
 
 /** The About rows (SET-12). */
-async function aboutFacts(): Promise<AboutFacts> {
+async function aboutFacts(session: { userEmail?: string; role?: UserRole }): Promise<AboutFacts> {
   const requestHeaders = await headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host") || "Unknown";
   const [[database], ai, applications] = await Promise.all([
@@ -202,11 +238,14 @@ async function aboutFacts(): Promise<AboutFacts> {
     loadAiConfig(),
     prisma.application.count({ where: { awaitingReview: false } }),
   ]);
+  const signInFact = session.userEmail
+    ? `${session.userEmail} · ${(session.role ?? UserRole.ADMIN) === UserRole.ADMIN ? "Administrator" : "User"}`
+    : "set via DOSSIER_PASSWORD";
   return [
     { label: "Version", value: appVersion },
     { label: "Server", value: host },
     { label: "Database", value: `PostgreSQL · ${formatBytes(Number(database.size))}` },
-    { label: "Sign-in", value: "set via DOSSIER_PASSWORD" },
+    { label: "Sign-in", value: signInFact },
     { label: "AI", value: [providerOption(ai.provider).name, ai.model].filter(Boolean).join(" · ") },
     { label: "Applications", value: String(applications) },
   ];

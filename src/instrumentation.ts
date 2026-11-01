@@ -5,9 +5,14 @@ export async function register() {
     const { checkEnvOnStartup } = await import("@/lib/env");
     checkEnvOnStartup();
 
+    const { logServerError } = await import("@/lib/log");
+
+    // Bootstrap the initial ADMIN account from DOSSIER_PASSWORD when the User table is empty.
+    const { ensureInitialAdmin } = await import("@/lib/auth/bootstrap");
+    await ensureInitialAdmin().catch((error: unknown) => logServerError("startup", error));
+
     // AI jobs left running by the previous process can't finish (E6-7).
     const { recoverInterruptedJobs } = await import("@/lib/jobs/runner");
-    const { logServerError } = await import("@/lib/log");
     await recoverInterruptedJobs().catch((error: unknown) => logServerError("startup", error));
 
     // Finished jobs, with what they were given and wrote, are deleted after a while.

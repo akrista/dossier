@@ -22,7 +22,8 @@ import { UsagePingDialog } from "./usage-ping-dialog";
  */
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   // Proxy already redirects signed-out visitors; this is the check next to the data.
-  await verifySession();
+  const session = await verifySession();
+  const isAdmin = (session.role ?? "ADMIN") === "ADMIN";
   // The day's usage ping and update check, if they haven't run yet: after the page, so they never slow one down.
   after(notePageLoad);
   after(checkForUpdatesDaily);
@@ -31,7 +32,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   after(() => rememberBrowserTimeZone(zone));
 
   const [name, settings, jar] = await Promise.all([loadProfileName(), loadSettings(), cookies()]);
-  const userName = name.trim() || "New user";
+  const userName = name.trim() || session.userName?.trim() || session.userEmail?.trim() || "New user";
   // Replies waiting for an answer or a link, on the Inbox item; the job agent's finds and drafts on its own (E16-6).
   const [waiting, agent] = await Promise.all([inboxCount().catch(() => 0), countAgentQueue().catch(() => 0)]);
 
@@ -45,11 +46,12 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
       </a>
       <Sidebar
         userName={userName}
-        update={updateNotice(settings)}
+        update={isAdmin ? updateNotice(settings) : null}
         currentVersion={appVersion}
         collapsed={parseSidebarCollapsed(jar.get(SIDEBAR_COOKIE)?.value)}
         counts={{ ...(waiting > 0 ? { "/inbox": waiting } : {}), ...(agent > 0 ? { "/agent": agent } : {}) }}
         colorScheme={parseColorScheme(jar.get(COLOR_SCHEME_COOKIE)?.value)}
+        isAdmin={isAdmin}
       />
       {/* The screen sits in a white panel inset from the shell. Each screen
           starts with its page bar (PageHeader or PageBar), which draws the
@@ -64,7 +66,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
         </main>
       </div>
       {/* Asked once, until answered (#172); nothing is sent before a yes. */}
-      {askForUsagePing(settings) && <UsagePingDialog host={USAGE_PING_HOST} />}
+      {isAdmin && askForUsagePing(settings) && <UsagePingDialog host={USAGE_PING_HOST} />}
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 
 /** Keeps a posting's score, replacing an older one. */
 export async function saveScore(posting: Pick<FoundPosting, "source" | "externalId">, fit: PostingFit, scoredWith: string): Promise<void> {
-  const where = { source_externalId: { source: posting.source, externalId: posting.externalId } };
+  const where = { userId_source_externalId: { userId: "", source: posting.source, externalId: posting.externalId } };
   const data = { score: fit.score, reasons: fit.reasons, redFlags: fit.redFlags, scoredWith };
   await prisma.postingScore.upsert({ where, create: { source: posting.source, externalId: posting.externalId, ...data }, update: data });
 }

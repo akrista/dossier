@@ -5,7 +5,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { jwtVerify, SignJWT } from "jose";
 
 import { passwordFingerprint } from "@/lib/auth/session";
+import { currentUserId, enterUserContext, runUnscoped, runWithUserId } from "@/lib/auth/user-context";
 import { deriveKey } from "@/lib/keys";
+import { prisma } from "@/lib/prisma";
 import { loadSettings } from "@/lib/settings-data";
 
 // Sign-in for the Claude connector (#221, src/app/api/mcp): a small OAuth 2.1
@@ -80,12 +82,18 @@ async function verify(kind: TokenKind, token: string | null | undefined): Promis
 }
 
 /** The password and the connector's time a token was signed for: both must still hold. */
-async function stamp(): Promise<{ pwd: string; gen: string } | null> {
+async function stamp(uid = currentUserId()): Promise<{ pwd: string; gen: string; uid?: string } | null> {
+  if (uid && (prisma as { user?: unknown }).user) {
+    const user = await runUnscoped(() => prisma.user.findUnique({ where: { id: uid } }));
+    if (!user || user.disabledAt !== null) return null;
+    const since = await runWithUserId(uid, () => connectorSince());
+    return since ? { pwd: passwordFingerprint(user.passwordHash), gen: since, uid } : null;
+  }
   const since = await connectorSince();
-  return since ? { pwd: passwordFingerprint(), gen: since } : null;
+  return since ? { pwd: passwordFingerprint(), gen: since, ...(uid ? { uid } : {}) } : null;
 }
 
-const stillValid = (claims: Record<string, unknown>, current: { pwd: string; gen: string } | null) =>
+const stillValid = (claims: Record<string, unknown>, current: { pwd: string; gen: string; uid?: string } | null) =>
   current !== null && claims.pwd === current.pwd && claims.gen === current.gen;
 
 // ─── Clients ─────────────────────────────────────────────────────────────────
@@ -133,7 +141,7 @@ export function challengeOf(verifier: string): string {
 
 export type TokenPair = { access_token: string; refresh_token: string; token_type: "Bearer"; expires_in: number; scope: string };
 
-async function tokens(clientId: string, resource: string, current: { pwd: string; gen: string }): Promise<TokenPair> {
+async function tokens(clientId: string, resource: string, current: { pwd: string; gen: string; uid?: string }): Promise<TokenPair> {
   return {
     access_token: await sign("access", { cid: clientId, res: resource, scope: SCOPE, ...current }, ACCESS_TOKEN_SECONDS),
     refresh_token: await sign("refresh", { cid: clientId, res: resource, ...current }, REFRESH_TOKEN_SECONDS),
@@ -145,7 +153,9 @@ async function tokens(clientId: string, resource: string, current: { pwd: string
 
 /** Trades a code for tokens, checking the client, the redirect and the PKCE verifier. */
 export async function exchangeCode({ code, clientId, redirectUri, verifier }: { code: string; clientId: string; redirectUri: string; verifier: string }): Promise<TokenPair> {
-  const [claims, current] = await Promise.all([verify("code", code), stamp()]);
+  const claims = await verify("code", code);
+  const uid = typeof claims?.uid === "string" ? claims.uid : undefined;
+  const current = await stamp(uid);
   if (!claims || !stillValid(claims, current)) throw new OAuthError("invalid_grant", "The code is invalid or has expired.");
   if (claims.cid !== clientId) throw new OAuthError("invalid_grant", "The code was issued to another client.");
   if (typeof claims.uri !== "string" || !sameRedirect(claims.uri, redirectUri)) throw new OAuthError("invalid_grant", "The redirect URI doesn't match.");
@@ -155,7 +165,9 @@ export async function exchangeCode({ code, clientId, redirectUri, verifier }: { 
 
 /** New tokens for a refresh token, with a new refresh token too. */
 export async function refresh({ refreshToken, clientId }: { refreshToken: string; clientId: string }): Promise<TokenPair> {
-  const [claims, current] = await Promise.all([verify("refresh", refreshToken), stamp()]);
+  const claims = await verify("refresh", refreshToken);
+  const uid = typeof claims?.uid === "string" ? claims.uid : undefined;
+  const current = await stamp(uid);
   if (!claims || !stillValid(claims, current) || claims.cid !== clientId) {
     throw new OAuthError("invalid_grant", "The refresh token is invalid or has expired.");
   }
@@ -163,10 +175,23 @@ export async function refresh({ refreshToken, clientId }: { refreshToken: string
 }
 
 /** Whether a bearer token lets Claude use Dossier now; the client it was issued to, if so. */
-export async function verifyAccessToken(token: string | null | undefined): Promise<{ clientId: string } | null> {
-  const [claims, current] = await Promise.all([verify("access", token), stamp()]);
+export async function verifyAccessToken(token: string | null | undefined): Promise<{ clientId: string; userId?: string } | null> {
+  const claims = await verify("access", token);
+  const uid = typeof claims?.uid === "string" ? claims.uid : undefined;
+  const current = await stamp(uid);
   if (!claims || claims.scope !== SCOPE || !stillValid(claims, current)) return null;
-  return { clientId: String(claims.cid ?? "") };
+  if (uid && (prisma as { user?: unknown }).user) {
+    const user = await runUnscoped(() => prisma.user.findUnique({ where: { id: uid } }));
+    if (user) {
+      enterUserContext({
+        userId: user.id,
+        role: user.role,
+        allowGlobalKeys: user.allowGlobalKeys,
+        keyPreference: user.keyPreference,
+      });
+    }
+  }
+  return { clientId: String(claims.cid ?? ""), ...(uid ? { userId: uid } : {}) };
 }
 
 // ─── Addresses ───────────────────────────────────────────────────────────────

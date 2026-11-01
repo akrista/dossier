@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createInviteToken } from "@/lib/auth/invite";
 import { loginWaitMs, recordLoginFailure, recordLoginSuccess } from "@/lib/auth/login-throttle";
 import { passwordMatches, startSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
 import { loadProfileName } from "@/lib/profile-data";
 
-import { signIn, signInWithForm } from "./actions";
+import { acceptInvite, signIn, signInWithForm } from "./actions";
 import { loginMessages } from "./messages";
 
 vi.mock("next/headers", () => ({
@@ -85,6 +86,32 @@ describe("signIn", () => {
     ).resolves.toMatchObject({ data: { redirectTo: "/" }, toast: "Welcome back, there." });
     expect(startSession).toHaveBeenCalledWith({ persistent: false });
   });
+
+  it("records lastSignInAt when signing in a user account", async () => {
+    const findUnique = vi.fn().mockResolvedValue({
+      id: "user-1",
+      email: "jane@example.com",
+      name: "Jane Doe",
+      role: "USER",
+      passwordHash: "hash-1",
+      disabledAt: null,
+    });
+    const update = vi.fn().mockResolvedValue({});
+    const count = vi.fn().mockResolvedValue(1);
+    (prisma as unknown as { user: unknown }).user = { findUnique, update, count };
+
+    try {
+      await expect(
+        signIn({ identifier: "jane@example.com", password: "correct horse", remember: true }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(update).toHaveBeenCalledWith({
+        where: { id: "user-1" },
+        data: { lastSignInAt: expect.any(Date) },
+      });
+    } finally {
+      delete (prisma as unknown as { user?: unknown }).user;
+    }
+  });
 });
 
 describe("signInWithForm", () => {
@@ -119,5 +146,56 @@ describe("signInWithForm", () => {
       /^redirect \/$/,
     );
     expect(startSession).toHaveBeenCalledWith({ persistent: false });
+  });
+});
+
+describe("acceptInvite", () => {
+  it("accepts a valid invite token, hashes the new password, and starts a session", async () => {
+    const invite = createInviteToken();
+    const findUnique = vi.fn().mockResolvedValue({
+      id: "user-1",
+      email: "alice@example.com",
+      name: "Alice",
+      role: "USER",
+      disabledAt: null,
+      inviteExpiresAt: invite.expiresAt,
+    });
+    const update = vi.fn().mockImplementation(async ({ data }) => ({
+      id: "user-1",
+      email: "alice@example.com",
+      name: data.name ?? "Alice",
+      role: "USER",
+      passwordHash: data.passwordHash,
+    }));
+    (prisma as unknown as { user: unknown }).user = { findUnique, update };
+
+    try {
+      const res = await acceptInvite({ token: invite.token, name: "Alice Smith", password: "new-password-123" });
+      expect(res).toEqual({
+        ok: true,
+        data: { redirectTo: "/" },
+        toast: "Welcome, Alice.",
+      });
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "user-1" },
+          data: expect.objectContaining({
+            inviteTokenHash: null,
+            inviteExpiresAt: null,
+            lastSignInAt: expect.any(Date),
+            name: "Alice Smith",
+          }),
+        }),
+      );
+      expect(startSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          persistent: true,
+          userId: "user-1",
+          role: "USER",
+        }),
+      );
+    } finally {
+      delete (prisma as unknown as { user?: unknown }).user;
+    }
   });
 });

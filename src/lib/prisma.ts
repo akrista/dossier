@@ -4,15 +4,20 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/generated/prisma/client";
 import { env } from "@/lib/env";
+import { wrapTenantClient } from "@/lib/tenant-prisma";
+
+export { wrapTenantClient } from "@/lib/tenant-prisma";
 
 // Reuse one client across hot reloads in development instead of opening a new
 // connection pool on every change.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 function client(): PrismaClient {
-  globalForPrisma.prisma ??= new PrismaClient({
-    adapter: new PrismaPg({ connectionString: env.DATABASE_URL }),
-  });
+  globalForPrisma.prisma ??= wrapTenantClient(
+    new PrismaClient({
+      adapter: new PrismaPg({ connectionString: env.DATABASE_URL }),
+    }),
+  );
   return globalForPrisma.prisma;
 }
 

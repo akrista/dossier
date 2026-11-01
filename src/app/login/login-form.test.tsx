@@ -19,13 +19,15 @@ describe("LoginForm", () => {
     replace.mockReset();
   });
 
-  it("has a single autofocused password field and no username", () => {
+  it("has an email/username field and an autofocused password field", () => {
     render(<LoginForm />);
+    const identifier = screen.getByLabelText("Email or username");
+    expect(identifier).toHaveAttribute("name", "identifier");
+    expect(identifier).toHaveAttribute("autocomplete", "username");
     const password = screen.getByLabelText("Password");
     expect(password).toHaveFocus();
     expect(password).toHaveAttribute("type", "password");
     expect(password).toHaveAttribute("autocomplete", "current-password");
-    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
     expect(screen.getByRole("checkbox", { name: "Keep me signed in for 30 days" })).not.toBeChecked();
   });
 
@@ -82,5 +84,20 @@ describe("LoginForm", () => {
     finish(result);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/profile"));
     expect(toastResult).toHaveBeenCalledWith(result);
+  });
+
+  it("passes the email/username identifier when entered", async () => {
+    const user = userEvent.setup();
+    vi.mocked(signIn).mockResolvedValue({ ok: true, data: { redirectTo: "/" }, toast: "Welcome back, Alice." });
+    render(<LoginForm />);
+
+    await user.type(screen.getByLabelText("Email or username"), "alice@example.com");
+    await user.type(screen.getByLabelText("Password"), "secret123{Enter}");
+    expect(signIn).toHaveBeenCalledWith({
+      identifier: "alice@example.com",
+      password: "secret123",
+      remember: false,
+      next: undefined,
+    });
   });
 });

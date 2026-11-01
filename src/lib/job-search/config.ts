@@ -1,9 +1,11 @@
 import "server-only";
 
+import { KeyPreference } from "@/generated/prisma/enums";
+import { getUserContext } from "@/lib/auth/user-context";
 import { env, type Env } from "@/lib/env";
 import { decryptSecret, JOB_SOURCE_KEY, SecretUnreadable } from "@/lib/secrets";
 import type { SettingsData } from "@/lib/settings";
-import { loadSettings } from "@/lib/settings-data";
+import { loadGlobalSettings, loadSettings } from "@/lib/settings-data";
 
 import type { RequestContext, SourceCredentials } from "./adapter";
 import { JobSearchError, jobSearchError } from "./errors";
@@ -85,9 +87,97 @@ export function resolveJobSearchConfig(saved: SavedJobSettings, source: JobEnv, 
   };
 }
 
+/**
+ * Resolves an ordered `[primary, secondary]` job-search configuration chain
+ * for a user, honoring `allowGlobalKeys` and `keyPreference`.
+ */
+export function resolveJobSearchConfigChain(
+  userSettings: SavedJobSettings,
+  globalSettings: (SavedJobSettings & { keyPreference?: KeyPreference }) | null,
+  source: JobEnv,
+  options: {
+    allowGlobalKeys?: boolean;
+    keyPreference?: KeyPreference | null;
+    secret?: string;
+  } = {},
+): JobSearchConfig[] {
+  const allowGlobalKeys = options.allowGlobalKeys ?? true;
+  const preference = options.keyPreference ?? globalSettings?.keyPreference ?? KeyPreference.USER_FIRST;
+  const noKeyEnv: JobEnv = {
+    DOSSIER_FREEHIRE_URL: source.DOSSIER_FREEHIRE_URL,
+    DOSSIER_JOBS_ARBEITSAGENTUR: source.DOSSIER_JOBS_ARBEITSAGENTUR,
+  };
+
+  if (!allowGlobalKeys) {
+    return [resolveJobSearchConfig(userSettings, noKeyEnv, options.secret)];
+  }
+
+  const effectiveGlobalSaved: SavedJobSettings = globalSettings ?? {
+    jobSource: null,
+    jsearchKeyEnc: null,
+    jsearchHost: "openwebninja",
+    adzunaAppId: null,
+    adzunaKeyEnc: null,
+    arbeitsagenturAcceptedAt: null,
+  };
+  const globalConfig = resolveJobSearchConfig(effectiveGlobalSaved, source, options.secret);
+
+  // Merge effective source and BA acceptance from user -> global -> env
+  const effectiveJobSource = userSettings.jobSource ?? effectiveGlobalSaved.jobSource;
+  const effectiveAcceptedAt = userSettings.arbeitsagenturAcceptedAt ?? effectiveGlobalSaved.arbeitsagenturAcceptedAt;
+
+  const userOwnConfig = resolveJobSearchConfig(
+    {
+      ...userSettings,
+      jobSource: effectiveJobSource,
+      arbeitsagenturAcceptedAt: effectiveAcceptedAt,
+    },
+    noKeyEnv,
+    options.secret,
+  );
+
+  const globalFallbackConfig: JobSearchConfig = {
+    ...globalConfig,
+    source: userOwnConfig.source,
+    saved: userSettings.jobSource !== null || globalConfig.saved,
+    arbeitsagentur: userOwnConfig.arbeitsagentur,
+  };
+
+  const hasUserSpecificKey = Boolean(userSettings.jsearchKeyEnc || (userSettings.adzunaAppId && userSettings.adzunaKeyEnc));
+  if (!hasUserSpecificKey) {
+    return [globalFallbackConfig];
+  }
+
+  const ordered = preference === KeyPreference.GLOBAL_FIRST ? [globalFallbackConfig, userOwnConfig] : [userOwnConfig, globalFallbackConfig];
+  return ordered;
+}
+
+async function safeLoadGlobalJobSettings(): Promise<(SavedJobSettings & { keyPreference?: KeyPreference }) | null> {
+  try {
+    return await loadGlobalSettings();
+  } catch {
+    return null;
+  }
+}
+
+/** Loads the ordered `[primary, secondary]` job-search configuration chain for the active user context. */
+export async function loadJobSearchConfigChain(): Promise<JobSearchConfig[]> {
+  const ctx = getUserContext();
+  const userSettings = await loadSettings();
+  if (!ctx.userId) {
+    return [resolveJobSearchConfig(userSettings, env)];
+  }
+  const globalSettings = await safeLoadGlobalJobSettings();
+  return resolveJobSearchConfigChain(userSettings, globalSettings, env, {
+    allowGlobalKeys: ctx.allowGlobalKeys,
+    keyPreference: ctx.keyPreference,
+  });
+}
+
 /** The job search configuration in effect right now. */
 export async function loadJobSearchConfig(): Promise<JobSearchConfig> {
-  return resolveJobSearchConfig(await loadSettings(), env);
+  const [primary] = await loadJobSearchConfigChain();
+  return primary;
 }
 
 /**
@@ -155,4 +245,29 @@ export function credentialsFor<S extends JobSource>(config: JobSearchConfig, sou
     case "FREEHIRE":
       return {} as SourceCredentials[S];
   }
+}
+
+/**
+ * Resolves the ordered `[primary, secondary]` credentials for `source` from
+ * a `JobSearchConfig[]` chain, deduplicating identical credentials and throwing
+ * the primary `JobSearchError` only when no candidate in the chain has usable credentials.
+ */
+export function credentialsChainFor<S extends JobSource>(configs: JobSearchConfig[], source: S): SourceCredentials[S][] {
+  const results: SourceCredentials[S][] = [];
+  let firstError: unknown = null;
+  for (const config of configs) {
+    try {
+      const cred = credentialsFor(config, source);
+      const serialized = JSON.stringify(cred);
+      if (!results.some((existing) => JSON.stringify(existing) === serialized)) {
+        results.push(cred);
+      }
+    } catch (err) {
+      if (!firstError) firstError = err;
+    }
+  }
+  if (results.length === 0) {
+    throw firstError ?? jobSearchError("no-key", source);
+  }
+  return results;
 }

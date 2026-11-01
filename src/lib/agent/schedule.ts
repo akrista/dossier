@@ -1,6 +1,7 @@
 import "server-only";
 
 import { AgentCandidateStatus } from "@/generated/prisma/enums";
+import { runUnscoped, runWithUserId } from "@/lib/auth/user-context";
 import { addDays, dayOf } from "@/lib/calendar-view";
 import { zonedTime } from "@/lib/google/slots";
 import { findUnfinishedJobs, startJob } from "@/lib/jobs/runner";
@@ -56,11 +57,33 @@ export async function startDueRun(now = new Date()): Promise<string | null> {
 
 /** After a restart, a candidate left DRAFTING has no job to finish it. */
 export async function resetInterruptedDrafts(): Promise<number> {
-  const { count } = await prisma.agentCandidate.updateMany({
-    where: { status: AgentCandidateStatus.DRAFTING },
-    data: { status: AgentCandidateStatus.SCORED, error: "Drafting was interrupted. Try again." },
-  });
+  const { count } = await runUnscoped(() =>
+    prisma.agentCandidate.updateMany({
+      where: { status: AgentCandidateStatus.DRAFTING },
+      data: { status: AgentCandidateStatus.SCORED, error: "Drafting was interrupted. Try again." },
+    }),
+  );
   return count;
+}
+
+async function startDueRunsForAllUsers(now = new Date()): Promise<void> {
+  if (!(prisma as { user?: unknown }).user) {
+    await startDueRun(now);
+    return;
+  }
+  const users = await runUnscoped(() =>
+    prisma.user.findMany({
+      where: { disabledAt: null },
+      select: { id: true, role: true, allowGlobalKeys: true, keyPreference: true },
+    }),
+  );
+  if (users.length === 0) {
+    await startDueRun(now);
+    return;
+  }
+  for (const user of users) {
+    await runWithUserId(user.id, () => startDueRun(now), user);
+  }
 }
 
 const globalForAgent = globalThis as unknown as { agentTimer?: ReturnType<typeof setInterval> };
@@ -69,7 +92,7 @@ const globalForAgent = globalThis as unknown as { agentTimer?: ReturnType<typeof
 export function startAgentSchedule(): void {
   if (globalForAgent.agentTimer) return;
   void resetInterruptedDrafts().catch((error: unknown) => logServerError("job agent", error));
-  const check = () => void startDueRun().catch((error: unknown) => logServerError("job agent schedule", error));
+  const check = () => void startDueRunsForAllUsers().catch((error: unknown) => logServerError("job agent schedule", error));
   globalForAgent.agentTimer = setInterval(check, EVERY_MS);
   // Don't keep the process alive just for this.
   globalForAgent.agentTimer.unref?.();

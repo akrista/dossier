@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { AiError } from "./errors";
+import { FailoverAIProvider } from "./index";
 import { AnthropicProvider, ANTHROPIC_FALLBACK_MODELS } from "./providers/anthropic";
 import { LMSTUDIO_UNREACHABLE, LmStudioProvider } from "./providers/lmstudio";
 import { LocalProvider } from "./providers/local";
@@ -604,5 +605,38 @@ describe("MockProvider", () => {
     expect(provider.calls).toHaveLength(2);
     const wrong = new MockProvider({ reply: () => ({ name: "Jane" }) });
     expect(await failure(wrong.complete({ ...ask, schema: Person }))).toMatchObject({ kind: "invalid-output" });
+  });
+});
+
+describe("FailoverAIProvider", () => {
+  it("retries with the secondary provider when the primary fails with auth, rate-limited, or busy errors", async () => {
+    let status = 429;
+    const requests = stubFetch(({ headers }) => {
+      if (headers.get("authorization") === "Bearer sk-primary") {
+        return json({ error: { message: "Quota exceeded" } }, { status });
+      }
+      return openaiChat("From fallback!");
+    });
+
+    const primary = new OpenAICompatibleProvider("OPENAI", "https://api.example.com/v1", "sk-primary", "gpt-x", 60_000);
+    const secondary = new OpenAICompatibleProvider("OPENAI", "https://api.example.com/v1", "sk-secondary", "gpt-x", 60_000);
+    const failover = new FailoverAIProvider(primary, secondary);
+
+    expect(await failover.complete(ask)).toBe("From fallback!");
+    expect(requests.map((r) => r.headers.get("authorization"))).toEqual(["Bearer sk-primary", "Bearer sk-secondary"]);
+
+    status = 401;
+    expect(await failover.complete(ask)).toBe("From fallback!");
+  });
+
+  it("does not failover on non-retryable input errors like too-long", async () => {
+    const requests = stubFetch(() => json({ error: { message: "maximum context length exceeded" } }, { status: 413 }));
+    const primary = new OpenAICompatibleProvider("OPENAI", "https://api.example.com/v1", "sk-primary", "gpt-x", 60_000);
+    const secondary = new OpenAICompatibleProvider("OPENAI", "https://api.example.com/v1", "sk-secondary", "gpt-x", 60_000);
+    const failover = new FailoverAIProvider(primary, secondary);
+
+    const error = await failure(failover.complete(ask));
+    expect(error.kind).toBe("too-long");
+    expect(requests).toHaveLength(1);
   });
 });

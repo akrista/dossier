@@ -2,6 +2,7 @@ import "server-only";
 
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { encryptApiKey } from "@/lib/ai/api-key";
+import { currentUserId } from "@/lib/auth/user-context";
 import { EXPORT_FORMAT, EXPORT_SCHEMA_VERSION, EXPORT_SCHEMA_VERSIONS, exportSchema, INSTALL_SETTINGS, SECRET_SETTINGS, type DossierExport } from "@/lib/data-export";
 import { encryptSecret, JOB_SOURCE_KEY } from "@/lib/secrets";
 
@@ -51,12 +52,13 @@ export function summarizeExport(data: DossierExport): ImportSummary {
 
 /** What the database holds now, the same way. */
 export async function currentSummary(db: PrismaClient): Promise<ImportSummary> {
+  const userId = currentUserId();
   const [applications, roles, skills, themes, notes] = await Promise.all([
     db.application.count(),
     db.experience.count(),
     db.skill.count(),
     db.theme.count({ where: { builtIn: false } }),
-    db.note.count(),
+    db.note.count({ where: { application: { userId } } }),
   ]);
   return { applications, roles, skills, themes, notes };
 }

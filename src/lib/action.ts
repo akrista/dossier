@@ -3,6 +3,7 @@ import "server-only";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 
+import { UserRole } from "@/generated/prisma/enums";
 import { getSession, type Session } from "@/lib/auth/session";
 import { logServerError } from "@/lib/log";
 import { messages } from "@/lib/messages";
@@ -52,6 +53,21 @@ export function action<S extends z.ZodType, T>(
   return async (input) => {
     const session = await getSession();
     if (!session) return { ok: false, error: messages.signedOut };
+    return run(schema, input, (data, toast) => handler(data, { session, toast }));
+  };
+}
+
+/**
+ * Like `action()`, but requires the signed-in user to have the `ADMIN` role.
+ */
+export function adminAction<S extends z.ZodType, T>(
+  schema: S,
+  handler: (input: z.output<S>, context: ActionContext) => Promise<T>,
+): (input: z.input<S>) => Promise<ActionResult<T>> {
+  return async (input) => {
+    const session = await getSession();
+    if (!session) return { ok: false, error: messages.signedOut };
+    if (session.role && session.role !== UserRole.ADMIN) return { ok: false, error: messages.forbidden };
     return run(schema, input, (data, toast) => handler(data, { session, toast }));
   };
 }

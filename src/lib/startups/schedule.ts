@@ -1,7 +1,9 @@
 import "server-only";
 
+import { runUnscoped, runWithUserId } from "@/lib/auth/user-context";
 import { findUnfinishedJobs } from "@/lib/jobs/runner";
 import { logServerError } from "@/lib/log";
+import { prisma } from "@/lib/prisma";
 import type { SettingsData } from "@/lib/settings";
 import { loadSettings } from "@/lib/settings-data";
 
@@ -33,12 +35,32 @@ export async function startDueStartupsRefresh(now = new Date()): Promise<string 
   return startStartupsRefresh();
 }
 
+async function startDueStartupsRefreshForAllUsers(now = new Date()): Promise<void> {
+  if (!(prisma as { user?: unknown }).user) {
+    await startDueStartupsRefresh(now);
+    return;
+  }
+  const users = await runUnscoped(() =>
+    prisma.user.findMany({
+      where: { disabledAt: null },
+      select: { id: true, role: true, allowGlobalKeys: true, keyPreference: true },
+    }),
+  );
+  if (users.length === 0) {
+    await startDueStartupsRefresh(now);
+    return;
+  }
+  for (const user of users) {
+    await runWithUserId(user.id, () => startDueStartupsRefresh(now), user);
+  }
+}
+
 const globalForStartups = globalThis as unknown as { startupsTimer?: ReturnType<typeof setInterval> };
 
 /** Starts the timer, once per process (dev reloads keep the one they have). */
 export function startStartupsSchedule(): void {
   if (globalForStartups.startupsTimer) return;
-  const check = () => void startDueStartupsRefresh().catch((error: unknown) => logServerError("startups schedule", error));
+  const check = () => void startDueStartupsRefreshForAllUsers().catch((error: unknown) => logServerError("startups schedule", error));
   globalForStartups.startupsTimer = setInterval(check, EVERY_MS);
   // Don't keep the process alive just for this.
   globalForStartups.startupsTimer.unref?.();

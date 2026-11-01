@@ -7,6 +7,7 @@ import { JobStatus } from "@/generated/prisma/enums";
 import { loadAiConfig } from "@/lib/ai/config";
 import { AiError } from "@/lib/ai/errors";
 import { providerOption } from "@/lib/ai/provider-options";
+import { runUnscoped, runWithUserId } from "@/lib/auth/user-context";
 import { logServerError } from "@/lib/log";
 import { prisma } from "@/lib/prisma";
 
@@ -221,29 +222,50 @@ async function pump(): Promise<void> {
 }
 
 async function execute(id: string, controller: AbortController): Promise<void> {
+  let jobUserId = "";
+  let userOpts: Parameters<typeof runWithUserId>[2] = {};
   try {
-    const job = await prisma.job.update({
-      where: { id },
-      data: { status: JobStatus.RUNNING, startedAt: new Date() },
-      select: { type: true, input: true },
-    });
-    await notify(id);
-    // Job types register when their module loads; make sure they all have.
-    await import("./definitions");
-    const definition = state.definitions.get(job.type);
-    if (!definition) throw new Error(`No job type "${job.type}" is defined.`);
+    const job = await runUnscoped(() =>
+      prisma.job.update({
+        where: { id },
+        data: { status: JobStatus.RUNNING, startedAt: new Date() },
+        select: { userId: true, type: true, input: true },
+      }),
+    );
+    jobUserId = job.userId ?? "";
+    if (jobUserId && (prisma as { user?: unknown }).user) {
+      const user = await runUnscoped(() =>
+        prisma.user.findUnique({
+          where: { id: jobUserId },
+          select: { role: true, allowGlobalKeys: true, keyPreference: true },
+        }),
+      );
+      if (user) userOpts = user;
+    }
 
-    const result = await definition.run(definition.input.parse(job.input), {
-      id,
-      signal: controller.signal,
-      step: async (name) => {
-        // Deleted meanwhile: there's no one left to do it for.
-        const { count } = await prisma.job.updateMany({ where: { id }, data: { step: name } });
-        if (count === 0) controller.abort();
-        else await notify(id);
+    await runWithUserId(
+      jobUserId,
+      async () => {
+        await notify(id);
+        // Job types register when their module loads; make sure they all have.
+        if (!state.definitions.has(job.type)) await import("./definitions");
+        const definition = state.definitions.get(job.type);
+        if (!definition) throw new Error(`No job type "${job.type}" is defined.`);
+
+        const result = await definition.run(definition.input.parse(job.input), {
+          id,
+          signal: controller.signal,
+          step: async (name) => {
+            // Deleted meanwhile: there's no one left to do it for.
+            const { count } = await prisma.job.updateMany({ where: { id }, data: { step: name } });
+            if (count === 0) controller.abort();
+            else await notify(id);
+          },
+        });
+        await finish(id, { status: JobStatus.DONE, result: definition.result.parse(result) as Prisma.InputJsonValue });
       },
-    });
-    await finish(id, { status: JobStatus.DONE, result: definition.result.parse(result) as Prisma.InputJsonValue });
+      userOpts,
+    );
   } catch (error) {
     // AI failures already say what to do; anything else is logged and kept vague.
     const message = controller.signal.aborted
@@ -252,7 +274,9 @@ async function execute(id: string, controller: AbortController): Promise<void> {
         ? error.message
         : JOB_MESSAGES.failed;
     if (!(error instanceof AiError) && !controller.signal.aborted) logServerError(`job ${id}`, error);
-    await finish(id, { status: JobStatus.FAILED, error: message }).catch((cause: unknown) => logServerError(`job ${id}`, cause));
+    await runWithUserId(jobUserId, () => finish(id, { status: JobStatus.FAILED, error: message }), userOpts).catch(
+      (cause: unknown) => logServerError(`job ${id}`, cause),
+    );
   }
 }
 
@@ -261,9 +285,11 @@ async function execute(id: string, controller: AbortController): Promise<void> {
  * can't finish, so they're marked failed and the page offers Retry.
  */
 export async function recoverInterruptedJobs(): Promise<number> {
-  const { count } = await prisma.job.updateMany({
-    where: { status: { in: [JobStatus.QUEUED, JobStatus.RUNNING] } },
-    data: { status: JobStatus.FAILED, error: JOB_MESSAGES.interrupted, finishedAt: new Date() },
-  });
+  const { count } = await runUnscoped(() =>
+    prisma.job.updateMany({
+      where: { status: { in: [JobStatus.QUEUED, JobStatus.RUNNING] } },
+      data: { status: JobStatus.FAILED, error: JOB_MESSAGES.interrupted, finishedAt: new Date() },
+    }),
+  );
   return count;
 }

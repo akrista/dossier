@@ -311,9 +311,9 @@ describe("ordering experience and education (E4-9)", () => {
 
     expect(await reorderEntries({ section: "experience", ids: [older, undated, newer] })).toEqual({ ok: true, data: null });
     expect(await roles()).toEqual(["Older", "Undated", "Newer"]);
-    expect((await prisma().setting.findUnique({ where: { key: "experienceOrder" } }))?.value).toBe("manual");
+    expect((await prisma().setting.findUnique({ where: { userId_key: { userId: "", key: "experienceOrder" } } }))?.value).toBe("manual");
     // Education keeps its own order.
-    expect(await prisma().setting.findUnique({ where: { key: "educationOrder" } })).toBeNull();
+    expect(await prisma().setting.findUnique({ where: { userId_key: { userId: "", key: "educationOrder" } } })).toBeNull();
   });
 
   it("puts a new entry first in an order set by hand, last by date", async () => {
@@ -346,8 +346,8 @@ describe("ordering experience and education (E4-9)", () => {
     expect((await loadProfile()).projects.map((entry) => entry.name)).toEqual(["Newer", "Older"]);
     await reorderEntries({ section: "project", ids: [a.data.id, b.data.id] });
     expect((await loadProfile()).projects.map((entry) => entry.name)).toEqual(["Older", "Newer"]);
-    expect((await prisma().setting.findUnique({ where: { key: "projectOrder" } }))?.value).toBe("manual");
-    expect(await prisma().setting.findUnique({ where: { key: "experienceOrder" } })).toBeNull();
+    expect((await prisma().setting.findUnique({ where: { userId_key: { userId: "", key: "projectOrder" } } }))?.value).toBe("manual");
+    expect(await prisma().setting.findUnique({ where: { userId_key: { userId: "", key: "experienceOrder" } } })).toBeNull();
     expect(await sortEntriesByDate({ section: "project" })).toEqual({ ok: true, data: [b.data.id, a.data.id] });
   });
 
@@ -364,7 +364,7 @@ describe("ordering experience and education (E4-9)", () => {
     await role("Two", 2019);
     const result = await reorderEntries({ section: "experience", ids: [one] });
     expect(result).toEqual({ ok: false, error: "The list changed in the meantime. Reload the page and try again." });
-    expect(await prisma().setting.findUnique({ where: { key: "experienceOrder" } })).toBeNull();
+    expect(await prisma().setting.findUnique({ where: { userId_key: { userId: "", key: "experienceOrder" } } })).toBeNull();
     expect(await reorderEntries({ section: "experience", ids: [one, one] })).toMatchObject({ ok: false });
   });
 });

@@ -51,6 +51,7 @@ const API_KEY_SETTING = "apiKeyEnc";
 export const SECRET_SETTINGS: readonly string[] = [API_KEY_SETTING, "jsearchKeyEnc", "adzunaKeyEnc"];
 /** The settings that belong to this install rather than its data (the usage ping's and its consent, the update check's, the Google client and the browser's time zone): never exported, and kept by an import. */
 export const INSTALL_SETTINGS: readonly string[] = [
+  "keyPreference",
   "usagePingId",
   "usagePingDay",
   "usagePingChoice",
@@ -378,18 +379,18 @@ export async function buildExport(
       tx.profileField.findMany({ select: { key: true, value: true }, orderBy: { key: "asc" } }),
       tx.skill.findMany({ select: { id: true, name: true, sort: true, createdAt: true }, orderBy: { createdAt: "asc" } }),
       tx.language.findMany({ select: { id: true, name: true, level: true, sort: true, createdAt: true }, orderBy: { createdAt: "asc" } }),
-      tx.experience.findMany({ include: { skills: { select: { skillId: true } } }, orderBy: { createdAt: "asc" } }),
-      tx.project.findMany({ include: { skills: { select: { skillId: true } } }, orderBy: { createdAt: "asc" } }),
-      tx.education.findMany({ orderBy: { createdAt: "asc" } }),
-      tx.publication.findMany({ orderBy: [{ sort: "asc" }, { createdAt: "asc" }] }),
-      tx.reference.findMany({ orderBy: { createdAt: "asc" } }),
-      tx.fact.findMany({ where: { applicationId: null }, omit: { applicationId: true }, orderBy: [{ sort: "asc" }, { createdAt: "asc" }] }),
-      tx.theme.findMany({ where: { builtIn: false }, omit: { builtIn: true }, orderBy: { createdAt: "asc" } }),
+      tx.experience.findMany({ omit: { userId: true }, include: { skills: { select: { skillId: true } } }, orderBy: { createdAt: "asc" } }),
+      tx.project.findMany({ omit: { userId: true }, include: { skills: { select: { skillId: true } } }, orderBy: { createdAt: "asc" } }),
+      tx.education.findMany({ omit: { userId: true }, orderBy: { createdAt: "asc" } }),
+      tx.publication.findMany({ omit: { userId: true }, orderBy: [{ sort: "asc" }, { createdAt: "asc" }] }),
+      tx.reference.findMany({ omit: { userId: true }, orderBy: { createdAt: "asc" } }),
+      tx.fact.findMany({ where: { applicationId: null }, omit: { userId: true, applicationId: true }, orderBy: [{ sort: "asc" }, { createdAt: "asc" }] }),
+      tx.theme.findMany({ where: { builtIn: false }, omit: { userId: true, builtIn: true }, orderBy: { createdAt: "asc" } }),
       tx.setting.findMany({ select: { key: true, value: true }, orderBy: { key: "asc" } }),
       tx.application.findMany({
         orderBy: { createdAt: "asc" },
         // The Gmail thread belongs to the mailbox, not the data (E15-2).
-        omit: { emailThreadId: true, interviewEventId: true, interviewCalendarId: true },
+        omit: { userId: true, emailThreadId: true, interviewEventId: true, interviewCalendarId: true },
         include: {
           events: { omit: { applicationId: true }, orderBy: { at: "asc" } },
           documents: {
@@ -399,14 +400,14 @@ export async function buildExport(
           },
           messages: { omit: { applicationId: true }, orderBy: { createdAt: "asc" } },
           notes: { omit: { applicationId: true }, orderBy: { createdAt: "asc" } },
-          facts: { omit: { applicationId: true }, orderBy: [{ sort: "asc" }, { createdAt: "asc" }] },
+          facts: { omit: { userId: true, applicationId: true }, orderBy: [{ sort: "asc" }, { createdAt: "asc" }] },
         },
       }),
-      tx.posting.findMany({ orderBy: { createdAt: "asc" } }),
-      tx.postingSearch.findMany({ orderBy: { createdAt: "asc" } }),
-      tx.agentCandidate.findMany({ orderBy: { createdAt: "asc" } }),
-      tx.startup.findMany({ orderBy: { createdAt: "asc" } }),
-      tx.startupBlock.findMany({ orderBy: { createdAt: "asc" } }),
+      tx.posting.findMany({ omit: { userId: true }, orderBy: { createdAt: "asc" } }),
+      tx.postingSearch.findMany({ omit: { userId: true }, orderBy: { createdAt: "asc" } }),
+      tx.agentCandidate.findMany({ omit: { userId: true }, orderBy: { createdAt: "asc" } }),
+      tx.startup.findMany({ omit: { userId: true }, orderBy: { createdAt: "asc" } }),
+      tx.startupBlock.findMany({ omit: { userId: true }, orderBy: { createdAt: "asc" } }),
     ]);
 
     // Keys only when asked for, decrypted; one that's unreadable here too (DOSSIER_SECRET changed) has nothing to export.

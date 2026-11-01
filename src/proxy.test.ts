@@ -137,4 +137,15 @@ describe("proxy", () => {
     const response = await proxy(request("/profile", { headers: { [PRINT_TOKEN_HEADER]: profileToken } }));
     expect(getRedirectUrl(response)).toContain("/login");
   });
+
+  it("allows /login/invite without a session and guards /admin against non-ADMIN users", async () => {
+    const inviteRes = await proxy(request("/login/invite?token=abc"));
+    expect(inviteRes.headers.get("x-middleware-next")).toBe("1");
+
+    const userToken = await encodeSession({ persistent: false, userId: "u1", role: "USER" }, { key, fingerprint: "user-fp" });
+    const adminToken = await encodeSession({ persistent: false, userId: "a1", role: "ADMIN" }, { key, fingerprint: "admin-fp" });
+
+    expect(getRedirectUrl(await proxy(request("/admin", { cookie: userToken })))).toBe("http://localhost:3000/");
+    expect((await proxy(request("/admin", { cookie: adminToken }))).headers.get("x-middleware-next")).toBe("1");
+  });
 });

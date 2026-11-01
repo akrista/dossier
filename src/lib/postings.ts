@@ -13,7 +13,7 @@ export type { PostingState };
 
 type PostingRef = { source: JobSource; externalId: string };
 
-const whereRef = ({ source, externalId }: PostingRef) => ({ source_externalId: { source, externalId } });
+const whereRef = ({ source, externalId }: PostingRef) => ({ userId_source_externalId: { userId: "", source, externalId } });
 
 function fieldsOf(found: FoundPosting) {
   return {

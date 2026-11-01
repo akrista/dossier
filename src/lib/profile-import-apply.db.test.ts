@@ -124,9 +124,9 @@ describe("applyImportedProfile (E4-10)", () => {
     expect(fields).toEqual({ name: "John Doe", city: "Utrecht", showAge: "false", photo: "data:image/png;base64,iVBORw0KGgo=", photoOnResumes: "false" });
     expect((await prisma().skill.findMany()).map((skill) => skill.name).sort()).toEqual(["User research", "figma"]);
     expect((await prisma().experience.findMany()).map((role) => role.company).sort()).toEqual(["Acme Payments", "fieldnote"]);
-    expect((await prisma().setting.findUnique({ where: { key: "experienceOrder" } }))?.value).toBe("date");
+    expect((await prisma().setting.findUnique({ where: { userId_key: { userId: "", key: "experienceOrder" } } }))?.value).toBe("date");
     expect((await prisma().project.findMany()).map((project) => project.name).sort()).toEqual(["Design tokens CLI", "payout simulator"]);
-    expect((await prisma().setting.findUnique({ where: { key: "projectOrder" } }))?.value).toBe("date");
+    expect((await prisma().setting.findUnique({ where: { userId_key: { userId: "", key: "projectOrder" } } }))?.value).toBe("date");
     expect((await prisma().publication.findMany({ orderBy: { sort: "asc" } })).map((entry) => entry.citation)).toEqual([
       "Doe, J. (2024). Calm payouts.",
       "Doe, J. (2025). A new one.",

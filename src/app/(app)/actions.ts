@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { revalidatePath } from "next/cache";
 
-import { action, ActionError } from "@/lib/action";
+import { action, ActionError, adminAction } from "@/lib/action";
 import { env } from "@/lib/env";
 import { saveSettings } from "@/lib/settings-data";
 import { saveUsagePingChoice } from "@/lib/usage-ping";
@@ -26,7 +26,7 @@ export const rememberQuietDays = action(z.object({ days: z.number().int().min(1)
  * sign-in or the switch in Settings → About. Closing the dialog is a no.
  * While DOSSIER_TELEMETRY is set, it decides, and this changes nothing.
  */
-export const chooseUsagePing = action(z.object({ send: z.boolean() }), async ({ send }) => {
+export const chooseUsagePing = adminAction(z.object({ send: z.boolean() }), async ({ send }) => {
   if (env.DOSSIER_TELEMETRY) {
     throw new ActionError(`DOSSIER_TELEMETRY=${env.DOSSIER_TELEMETRY} is set on the server, so it decides. Change it there.`);
   }

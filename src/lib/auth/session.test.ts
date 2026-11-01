@@ -69,6 +69,26 @@ describe("session tokens", () => {
       .encrypt(key);
     expect(await decodeSession(noExpiry, { key, fingerprint, now })).toBeNull();
   });
+
+  it("encodes and decodes userId and role for multi-user sessions", async () => {
+    const userFingerprint = passwordFingerprint("user-hash-1", deriveKey("password-fingerprint", secret));
+    const token = await encodeSession(
+      { persistent: true, userId: "user-123", role: "USER" },
+      { key, fingerprint: userFingerprint, now },
+    );
+    expect(await decodeSession(token, { key, fingerprint: userFingerprint, now })).toEqual({
+      persistent: true,
+      userId: "user-123",
+      role: "USER",
+      issuedAt: now,
+      expiresAt: later(30 * 24 * 60 * 60),
+    });
+    // Optimistic proxy decoding (strictUserFingerprint: false) accepts a user-scoped token with its own password fingerprint.
+    expect(await decodeSession(token, { key, fingerprint, strictUserFingerprint: false, now })).toMatchObject({
+      userId: "user-123",
+      role: "USER",
+    });
+  });
 });
 
 describe("password check", () => {

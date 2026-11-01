@@ -36,6 +36,7 @@ const schema = z.object({
       error: `DOSSIER_PASSWORD must be a hash of your password, not the password itself. ${HASH_PASSWORD} and set DOSSIER_PASSWORD to what it prints.`,
     }),
   ),
+  DOSSIER_ADMIN_EMAIL: optional(z.string().trim().min(1)),
   DOSSIER_SECRET: required(
     "DOSSIER_SECRET",
     `Set it to a random string of at least ${SECRET_MIN_LENGTH} characters, ${GENERATE_SECRET}.`,

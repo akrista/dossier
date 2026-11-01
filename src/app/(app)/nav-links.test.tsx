@@ -37,6 +37,11 @@ describe("NavLinks", () => {
     ]);
   });
 
+  it("shows the Admin link when isAdmin is true", () => {
+    render(<NavLinks isAdmin />);
+    expect(screen.getByRole("link", { name: "Admin" })).toHaveAttribute("href", "/admin");
+  });
+
   it("marks exactly one current section", () => {
     expect(currentItem("/")).toEqual(["Dashboard"]);
     expect(currentItem("/profile")).toEqual(["Profile"]);

@@ -32,6 +32,7 @@ describe("stored settings", () => {
       baseUrl: null,
       model: null,
       apiKeyEnc: null,
+      keyPreference: "USER_FIRST",
       creativity: "BALANCED",
       strict: true,
       showDiff: true,

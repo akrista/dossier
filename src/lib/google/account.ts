@@ -1,5 +1,6 @@
 import "server-only";
 
+import { currentUserId } from "@/lib/auth/user-context";
 import { prisma } from "@/lib/prisma";
 import { decryptSecret, encryptSecret, GOOGLE_TOKEN, SecretUnreadable } from "@/lib/secrets";
 
@@ -11,6 +12,7 @@ import { googleClient, hasScopes, refreshAccessToken, revokeToken, type ScopeGro
 // is stored encrypted.
 
 const ACCOUNT_ID = "google";
+const tokenKey = () => currentUserId() || ACCOUNT_ID;
 
 /** What the settings screen may know about the connection: never a token. */
 export type GoogleConnection =
@@ -61,7 +63,7 @@ export async function saveGoogleAccount({ email, refreshToken, scopes }: { email
     create: { id: ACCOUNT_ID, email, refreshTokenEnc, scopes },
     update: { email, refreshTokenEnc, scopes: merged, ...(sameAccount ? {} : { historyId: null, lastSyncAt: null, syncProblem: null }) },
   });
-  tokens.delete(ACCOUNT_ID);
+  tokens.delete(tokenKey());
 }
 
 /** Disconnects: revokes the grant at Google and forgets the account. Mail already fetched stays. */
@@ -74,7 +76,7 @@ export async function disconnectGoogle(): Promise<void> {
     if (!(error instanceof SecretUnreadable)) throw error;
   }
   await prisma.googleAccount.deleteMany({ where: { id: ACCOUNT_ID } });
-  tokens.delete(ACCOUNT_ID);
+  tokens.delete(tokenKey());
 }
 
 // On globalThis, so the dev server's hot reloads keep them.
@@ -88,7 +90,8 @@ export async function accessToken(group: ScopeGroup, signal?: AbortSignal): Prom
   if (!hasScopes(account.scopes, group)) {
     throw new GoogleError("scope", "Dossier doesn't have that permission yet. Allow it in Settings → Google.");
   }
-  const cached = tokens.get(ACCOUNT_ID);
+  const key = tokenKey();
+  const cached = tokens.get(key);
   if (cached && cached.expires > Date.now() + 60_000) return cached.token;
   let refreshToken: string;
   try {
@@ -97,7 +100,7 @@ export async function accessToken(group: ScopeGroup, signal?: AbortSignal): Prom
     throw new GoogleError("revoked", "The saved Google access can't be read, probably since DOSSIER_SECRET changed. Connect your Google account again.");
   }
   const answer = await refreshAccessToken(refreshToken, signal);
-  tokens.set(ACCOUNT_ID, { token: answer.access_token, expires: Date.now() + answer.expires_in * 1000 });
+  tokens.set(key, { token: answer.access_token, expires: Date.now() + answer.expires_in * 1000 });
   return answer.access_token;
 }
 
@@ -128,7 +131,7 @@ export async function googleFetch<T = unknown>(
   }
   const path = new URL(url).pathname;
   if (response.status === 401) {
-    tokens.delete(ACCOUNT_ID);
+    tokens.delete(tokenKey());
     throw new GoogleError("revoked", "Google no longer accepts Dossier's access. Connect your Google account again.", `${path}: 401`);
   }
   if (response.status === 403) throw new GoogleError("scope", "Google refused that. Check the permissions in Settings → Google.", `${path}: 403`);

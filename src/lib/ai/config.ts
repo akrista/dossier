@@ -1,8 +1,9 @@
 import "server-only";
 
-import { AiProvider } from "@/generated/prisma/enums";
+import { AiProvider, KeyPreference } from "@/generated/prisma/enums";
+import { getUserContext } from "@/lib/auth/user-context";
 import { env, type Env } from "@/lib/env";
-import { loadSettings } from "@/lib/settings-data";
+import { loadGlobalSettings, loadSettings } from "@/lib/settings-data";
 
 import { API_KEY_UNREADABLE, ApiKeyUnreadable, apiKeyState, decryptApiKey } from "./api-key";
 import type { AiSettingsView, KeyState } from "./provider-options";
@@ -84,9 +85,104 @@ export function resolveAiConfig(saved: SavedSettings | null, source: AiEnv, secr
   };
 }
 
-/** The AI configuration in effect right now. */
+/**
+ * Resolves an ordered `[primary, secondary]` AI configuration chain for a user,
+ * honoring `allowGlobalKeys` and `keyPreference` (`USER_FIRST` vs `GLOBAL_FIRST`).
+ */
+export function resolveAiConfigChain(
+  userSettings: SavedSettings | null,
+  globalSettings: (SavedSettings & { keyPreference?: KeyPreference }) | null,
+  source: AiEnv,
+  options: {
+    allowGlobalKeys?: boolean;
+    keyPreference?: KeyPreference | null;
+    secret?: string;
+  } = {},
+): AiConfig[] {
+  const allowGlobalKeys = options.allowGlobalKeys ?? true;
+  const preference = options.keyPreference ?? globalSettings?.keyPreference ?? KeyPreference.USER_FIRST;
+  const noKeyEnv: AiEnv = { DOSSIER_AI_TIMEOUT_SECONDS: source.DOSSIER_AI_TIMEOUT_SECONDS };
+
+  // When global keys are forbidden for this user, only their own saved settings apply.
+  if (!allowGlobalKeys) {
+    return [resolveAiConfig(userSettings, noKeyEnv, options.secret)];
+  }
+
+  const globalConfig = resolveAiConfig(globalSettings, source, options.secret);
+  const hasGlobalCandidate = Boolean(
+    globalSettings?.provider ||
+      source.DOSSIER_AI_PROVIDER ||
+      globalConfig.apiKey,
+  );
+
+  const hasUserKey = Boolean(
+    userSettings?.apiKeyEnc ||
+      userSettings?.provider === AiProvider.LOCAL ||
+      userSettings?.provider === AiProvider.LMSTUDIO,
+  );
+
+  if (hasUserKey) {
+    const effectiveUserSaved: SavedSettings = {
+      provider: userSettings?.provider ?? globalConfig.provider,
+      baseUrl: userSettings?.baseUrl ?? (userSettings?.provider && userSettings.provider !== globalConfig.provider ? null : globalSettings?.baseUrl ?? null),
+      model: userSettings?.model ?? (userSettings?.provider && userSettings.provider !== globalConfig.provider ? null : globalConfig.model),
+      apiKeyEnc: userSettings?.apiKeyEnc ?? null,
+    };
+    const userConfig = resolveAiConfig(effectiveUserSaved, noKeyEnv, options.secret);
+
+    if (!hasGlobalCandidate) return [userConfig];
+    const ordered = preference === KeyPreference.GLOBAL_FIRST ? [globalConfig, userConfig] : [userConfig, globalConfig];
+    if (
+      ordered[0].provider === ordered[1].provider &&
+      ordered[0].baseUrl === ordered[1].baseUrl &&
+      ordered[0].model === ordered[1].model &&
+      ordered[0].apiKey === ordered[1].apiKey
+    ) {
+      return [ordered[0]];
+    }
+    return ordered;
+  }
+
+  if (userSettings?.provider) {
+    // User selected a provider/model without setting a personal key: lend the global/env key if compatible.
+    const mergedSaved: SavedSettings = {
+      provider: userSettings.provider,
+      baseUrl: userSettings.baseUrl ?? (globalSettings?.provider === userSettings.provider ? globalSettings.baseUrl : null),
+      model: userSettings.model ?? (globalSettings?.provider === userSettings.provider ? globalSettings.model : null),
+      apiKeyEnc: globalSettings?.provider === userSettings.provider ? globalSettings.apiKeyEnc : null,
+    };
+    return [resolveAiConfig(mergedSaved, source, options.secret)];
+  }
+
+  return [globalConfig];
+}
+
+async function safeLoadGlobalSettings(): Promise<(SavedSettings & { keyPreference?: KeyPreference }) | null> {
+  try {
+    return await loadGlobalSettings();
+  } catch {
+    return null;
+  }
+}
+
+/** Loads the ordered `[primary, secondary]` AI configuration chain for the active user context. */
+export async function loadAiConfigChain(): Promise<AiConfig[]> {
+  const ctx = getUserContext();
+  const userSettings = await loadSettings();
+  if (!ctx.userId) {
+    return [resolveAiConfig(userSettings, env)];
+  }
+  const globalSettings = await safeLoadGlobalSettings();
+  return resolveAiConfigChain(userSettings, globalSettings, env, {
+    allowGlobalKeys: ctx.allowGlobalKeys,
+    keyPreference: ctx.keyPreference,
+  });
+}
+
+/** The primary AI configuration in effect right now. */
 export async function loadAiConfig(): Promise<AiConfig> {
-  return resolveAiConfig(await loadSettings(), env);
+  const [primary] = await loadAiConfigChain();
+  return primary;
 }
 
 /**
@@ -94,13 +190,14 @@ export async function loadAiConfig(): Promise<AiConfig> {
  * whether it comes from Settings or DOSSIER_AI_*, and never the key.
  */
 export async function loadAiSettingsView(): Promise<AiSettingsView> {
+  const ctx = getUserContext();
   const saved = await loadSettings();
-  const config = resolveAiConfig(saved, env);
+  const config = await loadAiConfig();
   return {
     provider: config.provider,
     baseUrl: config.baseUrl,
     model: config.model ?? "",
-    keyState: keyStateOf(saved, config),
+    keyState: !ctx.allowGlobalKeys && !saved.apiKeyEnc ? "none" : keyStateOf(saved, config),
   };
 }
 
@@ -112,20 +209,26 @@ export function keyStateOf(saved: { provider: AiProvider | null; apiKeyEnc: stri
 
 /** Whether an AI provider has been chosen, in Settings or with DOSSIER_AI_PROVIDER. */
 export async function isAiConfigured(): Promise<boolean> {
+  const ctx = getUserContext();
+  const userSettings = await loadSettings();
+  if (userSettings.provider) return true;
+  if (!ctx.allowGlobalKeys) return false;
   if (env.DOSSIER_AI_PROVIDER) return true;
-  return Boolean((await loadSettings()).provider);
+  if (!ctx.userId) return false;
+  const globalSettings = await safeLoadGlobalSettings();
+  return Boolean(globalSettings?.provider);
 }
 
 /**
  * Whether Dossier's own AI model can be called: a provider with its model,
- * and a key for the hosted ones that always need one. Without it, and with
- * the Claude connector on, the AI buttons hand the work to Claude chat
- * (src/lib/connector/handoff.ts, #221).
+ * and a key for the hosted ones that always need one.
  */
 export async function isAiUsable(): Promise<boolean> {
   if (!(await isAiConfigured())) return false;
-  const config = await loadAiConfig();
-  if (!config.model || config.apiKeyProblem) return false;
-  const needsKey = config.provider === AiProvider.ANTHROPIC || config.provider === AiProvider.MISTRAL;
-  return !needsKey || Boolean(config.apiKey);
+  const chain = await loadAiConfigChain();
+  return chain.some((config) => {
+    if (!config.model || config.apiKeyProblem) return false;
+    const needsKey = config.provider === AiProvider.ANTHROPIC || config.provider === AiProvider.MISTRAL;
+    return !needsKey || Boolean(config.apiKey);
+  });
 }

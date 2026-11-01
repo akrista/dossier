@@ -70,6 +70,7 @@ export function GoogleSection({
   initial,
   browserTimeZone,
   redirectUri,
+  isAdmin = true,
 }: {
   connection: GoogleConnectionView;
   client: GoogleClientView;
@@ -77,6 +78,7 @@ export function GoogleSection({
   browserTimeZone: string | null;
   /** The address to register in Google Cloud. */
   redirectUri: string;
+  isAdmin?: boolean;
 }) {
   const track = useTrackSave();
   const router = useRouter();
@@ -107,7 +109,7 @@ export function GoogleSection({
       router.refresh();
     });
 
-  if (connection.status === "not-configured") return <SetupSteps redirectUri={redirectUri} client={client} />;
+  if (connection.status === "not-configured") return <SetupSteps redirectUri={redirectUri} client={client} isAdmin={isAdmin} />;
 
   return (
     <>
@@ -284,7 +286,7 @@ export function GoogleSection({
         </>
       )}
 
-      <ClientCard initial={client} connected={connection.status === "connected"} />
+      {isAdmin && <ClientCard initial={client} connected={connection.status === "connected"} />}
 
       <ConfirmDialog
         open={confirming}
@@ -315,7 +317,16 @@ function Permission({ granted, group, label }: { granted: boolean; group: string
 }
 
 /** Before the server has a Google client: how to make one. */
-function SetupSteps({ redirectUri, client }: { redirectUri: string; client: GoogleClientView }) {
+function SetupSteps({ redirectUri, client, isAdmin = true }: { redirectUri: string; client: GoogleClientView; isAdmin?: boolean }) {
+  if (!isAdmin) {
+    return (
+      <>
+        <SettingsSectionIntro title="Google">
+          Google integration is not configured on this server yet. Ask an administrator to configure the Google OAuth client.
+        </SettingsSectionIntro>
+      </>
+    );
+  }
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(redirectUri);

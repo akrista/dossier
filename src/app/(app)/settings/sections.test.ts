@@ -5,6 +5,7 @@ import { settingsSectionFromParam, settingsSectionHref } from "./sections";
 describe("settings sections", () => {
   it("reads the section from the URL, defaulting to AI provider", () => {
     expect(settingsSectionFromParam("data")).toBe("data");
+    expect(settingsSectionFromParam("account")).toBe("account");
     expect(settingsSectionFromParam(undefined)).toBe("ai");
     expect(settingsSectionFromParam("nope")).toBe("ai");
     expect(settingsSectionFromParam(["about", "data"])).toBe("ai");
