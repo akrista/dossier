@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 
 import { KeyPreference, UserRole } from "@/generated/prisma/enums";
-import { isAiConfigured, loadAiConfig, loadAiSettingsView } from "@/lib/ai/config";
+import { loadAiConfig, loadAiSettingsView } from "@/lib/ai/config";
 import { verifySession } from "@/lib/auth/session";
 import { jobSearchView, loadJobSearchConfig } from "@/lib/job-search/config";
 import { COUNTRIES } from "@/lib/job-search/countries";
@@ -20,6 +20,8 @@ import { lastKnownTimeZone, userTimeZone } from "@/lib/time-zone";
 import { appVersion } from "@/lib/version";
 import { prisma } from "@/lib/prisma";
 import { loadProfileName } from "@/lib/profile-data";
+import { scoringProblem } from "@/lib/scoring";
+import { loadScoringConfig, scoringView } from "@/lib/scoring/config";
 import { loadGlobalSettings, loadSettings } from "@/lib/settings-data";
 import { availableUpdate } from "@/lib/update-check";
 import { USAGE_PING_HOST, usagePingChoice } from "@/lib/usage-ping";
@@ -33,6 +35,7 @@ import { DocumentsSection } from "./documents-section";
 import { GoogleSection } from "./google-section";
 import { GoogleNotice } from "./google-notice";
 import { JobSearchSection } from "./job-search-section";
+import { ScoringSection } from "./scoring-section";
 import { AboutSection, type AboutFacts, type UsagePingView } from "./about-section";
 import { ConnectorSection } from "./connector-section";
 import { settingsSectionFromParam } from "./sections";
@@ -75,6 +78,8 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
         </>
       ) : section === "jobs" ? (
         <JobSearchSection initial={jobSearchView(await loadJobSearchConfig())} />
+      ) : section === "scoring" ? (
+        <ScoringSection initial={scoringView(await loadScoringConfig())} />
       ) : section === "agent" ? (
         <AgentSection
           initial={{
@@ -88,7 +93,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
             autoDraft: settings.agentAutoDraft,
           }}
           source={(await loadJobSearchConfig()).source}
-          aiReady={await isAiConfigured()}
+          scoring={await scoringReadiness()}
           countries={COUNTRIES}
           timeZone={await lastKnownTimeZone()}
         />
@@ -117,8 +122,11 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
             }}
           />
         </>
-      ) : section === "claude" ? (
-        <ConnectorSection initial={{ on: settings.connectorEnabledAt !== null }} address={mcpUrl(env.DOSSIER_PUBLIC_URL ?? (await requestOrigin()))} />
+      ) : section === "connector" ? (
+        <ConnectorSection
+          initial={{ on: settings.connectorEnabledAt !== null, redirects: settings.connectorRedirects }}
+          address={mcpUrl(env.DOSSIER_PUBLIC_URL ?? (await requestOrigin()))}
+        />
       ) : section === "account" ? (
         <AccountSection
           initial={{
@@ -169,6 +177,12 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
       )}
     </SettingsScreen>
   );
+}
+
+/** What scores the job agent's postings, and whether it's set up (#274). */
+async function scoringReadiness() {
+  const config = await loadScoringConfig();
+  return { scorer: config.scorer, ready: (await scoringProblem(config)) === null };
 }
 
 /** The connection as the Google section shows it: never a token. */
